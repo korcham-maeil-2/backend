@@ -1,0 +1,32 @@
+[project]
+name = "backend"
+version = "0.1.0"
+description = "월급지도 백엔드 API"
+readme = "README.md"
+authors = [
+    { name = "김성호", email = "tjdgh0313@gmail.com" }
+]
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "fastapi[standard]>=0.162.2",
+]
+
+[build-system]
+requires = ["uv_build>=0.13.7,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.17.4",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.format]
+quote-style = "single"
+line-ending = "lf"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
