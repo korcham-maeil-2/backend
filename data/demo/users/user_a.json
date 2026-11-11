@@ -1,9 +1,12 @@
 {
-  "_note": "시연용 가상 사용자. 실제 개인정보 아님. 시나리오 down_yeongam, near_pangyo에서 사용. 금액 단위는 원.",
+  "_note": "시연용 가상 사용자. 실제 개인정보 아님. 시나리오 down_naju, near_pangyo에서 사용. 금액 단위는 원.",
   "id": "user_a",
   "label": "가상 사용자 A (서울 거주 사회초년생)",
   "age": 26,
-  "household": { "size": 1, "dependents": 0 },
+  "household": {
+    "size": 1,
+    "dependents": 0
+  },
   "current_residence": {
     "sido": "서울특별시",
     "sigungu": "관악구",
@@ -14,16 +17,19 @@
     "maintenance_fee_krw": 70000
   },
   "current_transport_monthly_krw": 62000,
-  "fixed_expenses_monthly_krw": { "학자금 대출 상환": 150000, "통신비": 55000 },
+  "fixed_expenses_monthly_krw": {
+    "학자금 대출 상환": 150000,
+    "통신비": 55000
+  },
   "scenario_inputs": {
+    "down_naju": {
+      "trips_home_per_month": 1,
+      "round_trip_cost_krw": 100000,
+      "note": "나주 빛가람동 원룸으로 이사, 월 1회 서울 왕복 (사용자 입력값). 나주 월세는 실거래가 추정값 사용. 기존 관악구 원룸은 계약 종료 가정"
+    },
     "near_pangyo": {
       "commute_from_current_home_transport_monthly_krw": 110000,
       "note": "관악구→판교 대중교통 월 교통비 (사용자 입력값)"
-    },
-    "down_yeongam": {
-      "trips_home_per_month": 1,
-      "round_trip_cost_krw": 110000,
-      "note": "영암 기숙사 거주, 월 1회 서울 왕복 (사용자 입력값). 기존 관악구 원룸은 계약 종료 가정"
     }
   }
 }
