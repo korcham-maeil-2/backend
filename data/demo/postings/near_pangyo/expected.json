@@ -1,0 +1,30 @@
+{
+  "_note": "정규화(normalize) 노드가 이 공고에서 뽑아야 하는 값. 테스트 정답으로 쓴다. 금액 단위는 원.",
+  "id": "near_pangyo",
+  "company": "(가상) 이음데이터랩(주)",
+  "job_title": "백엔드 개발자 신입",
+  "employment_type": "정규직",
+  "probation": { "months": 3, "pay_rate": 1.0 },
+  "location": {
+    "raw": "경기 성남시 분당구 판교역로 (판교테크노밸리)",
+    "sido": "경기도",
+    "sigungu": "성남시 분당구",
+    "lawd_cd": "41135"
+  },
+  "salary": {
+    "type": "annual",
+    "annual_krw": 36000000,
+    "raw": "3,600만원 (기본급 기준, 성과급 별도)",
+    "note": "성과급은 금액 미정이라 계산에서 제외"
+  },
+  "nontaxable_meal_monthly_krw": 200000,
+  "meals": null,
+  "housing": { "type": "none", "monthly_cost_krw": null, "raw": "없음" },
+  "commute": { "shuttle_bus": false, "transport_allowance_monthly_krw": 0 },
+  "other_allowances_monthly_krw": { "통신비": 50000 },
+  "application_period": { "start": "2026-11-16", "end": "2026-12-10" },
+  "missing_info_to_ask": [
+    "서울 관악구에서 판교까지 월 통근 교통비 (경로 API를 쓰지 않으므로 사용자 입력)",
+    "판교 근처로 이사할 경우 희망 지역"
+  ]
+}

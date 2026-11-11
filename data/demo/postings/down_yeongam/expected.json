@@ -1,0 +1,35 @@
+{
+  "_note": "정규화(normalize) 노드가 이 공고에서 뽑아야 하는 값. 테스트 정답으로 쓴다. 금액 단위는 원.",
+  "id": "down_yeongam",
+  "company": "(가상) 남도선박설계(주)",
+  "job_title": "선박 설계 보조(CAD) 신입",
+  "employment_type": "정규직",
+  "probation": { "months": 3, "pay_rate": 0.9 },
+  "location": {
+    "raw": "전남 영암군 삼호읍 대불국가산업단지 내",
+    "sido": "전남광주통합특별시",
+    "sigungu": "영암군",
+    "lawd_cd": "12800",
+    "note": "공고에는 옛 표기 '전남'으로 적혀 있음. 코드표 기준 시도명은 전남광주통합특별시"
+  },
+  "salary": {
+    "type": "undisclosed",
+    "annual_krw": null,
+    "raw": "회사 내규에 따름 (면접 후 결정)",
+    "note": "연봉 비공개 → 손익분기 연봉 계산 대상"
+  },
+  "nontaxable_meal_monthly_krw": null,
+  "meals": "중식·석식 제공",
+  "housing": {
+    "type": "dormitory",
+    "monthly_cost_krw": 80000,
+    "raw": "원룸형 1인 1실 제공 (관리비·공과금 월 8만원 본인 부담)"
+  },
+  "commute": { "shuttle_bus": true, "transport_allowance_monthly_krw": null },
+  "overtime": "연장근로 있음 (수당 별도, 금액 미정)",
+  "application_period": { "start": "2026-11-16", "end": "2026-12-15" },
+  "missing_info_to_ask": [
+    "희망 연봉 또는 제시받은 연봉 (비공개)",
+    "명절 외 귀향 빈도와 1회 왕복 교통비"
+  ]
+}
