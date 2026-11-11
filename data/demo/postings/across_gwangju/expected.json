@@ -1,0 +1,38 @@
+{
+  "_note": "정규화(normalize) 노드가 채팅 텍스트에서 뽑아야 하는 값. 테스트 정답으로 쓴다. 금액 단위는 원.",
+  "id": "across_gwangju",
+  "company": "늘찬오토텍",
+  "job_title": "품질관리 경력직",
+  "employment_type": null,
+  "location": {
+    "raw": "광주 광산구 하남산단",
+    "sido": "전남광주통합특별시",
+    "sigungu": "광산구",
+    "lawd_cd": "12330",
+    "note": "사용자는 옛 표기 '광주'로 말함. 코드표(data/lawd_codes.csv) 기준 시도명은 전남광주통합특별시"
+  },
+  "salary": {
+    "type": "to_propose",
+    "annual_krw": null,
+    "basis": "세전 고정연봉 (퇴직금·연장근로수당 별도)",
+    "note": "회사가 희망 연봉을 먼저 물음 → 현상 유지선·희망 연봉을 계산해 줌"
+  },
+  "nontaxable_meal_monthly_krw": null,
+  "meals": "중식 제공 (현물 → 식대 비과세 없음)",
+  "housing": {
+    "type": "none",
+    "company_housing": false,
+    "raw": "기숙사 없음"
+  },
+  "commute": {
+    "shuttle_bus": false,
+    "transport_allowance_monthly_krw": null
+  },
+  "overtime": "연장근로수당 별도 (시간 미정)",
+  "start_date_raw": "3월 초 (협의 중)",
+  "reply_deadline": "2026-11-16",
+  "moving_cost_krw": 700000,
+  "missing_info_to_ask": [
+    "광주에서 연장근로 예상 (모르면 0시간으로 계산)"
+  ]
+}

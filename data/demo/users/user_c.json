@@ -1,0 +1,63 @@
+{
+  "_note": "시연용 가상 사용자. 실제 개인정보 아님. 시나리오 across_gwangju에서 사용. 금액 단위는 원. 현재 연봉은 채팅에 없고 user_c/ 파일에서 읽어야 한다",
+  "id": "user_c",
+  "label": "가상 사용자 C (울산 북구 원룸 자취, 자동차 부품사 3년 차)",
+  "name": "문태경",
+  "age": 29,
+  "household": {
+    "size": 1,
+    "dependents": 0
+  },
+  "current_job": {
+    "company": "(주)벼리정밀",
+    "team": "품질보증팀",
+    "joined": "2024-03"
+  },
+  "current_residence": {
+    "sido": "울산광역시",
+    "sigungu": "북구",
+    "lawd_cd": "31200",
+    "housing_type": "원룸 월세",
+    "deposit_krw": 3000000,
+    "monthly_rent_krw": 400000,
+    "lease_end": "2027-02-28"
+  },
+  "files": {
+    "user_c/payslip_2026-10.png": "10월 급여명세서 (모바일 앱 캡처)",
+    "user_c/spending_2026-08_10.xlsx": "가계부 앱 내보내기 3개월치 211건"
+  },
+  "expected_from_files": {
+    "payslip": {
+      "pay_date": "2026-10-23",
+      "base_pay": 2966660,
+      "overtime_pay": 363624,
+      "overtime_hours": 16,
+      "meal_nontaxable": 200000,
+      "gross": 3530284,
+      "deductions": 407240,
+      "net": 3123044,
+      "fixed_annual_krw": 37999920,
+      "note": "고정연봉 = (기본급 + 식대) × 12 ≈ 3,800만원"
+    },
+    "spending": {
+      "salary_deposits": {
+        "2026-08": 3046208,
+        "2026-09": 2922369,
+        "2026-10": 3123044
+      },
+      "bonus_excluded": {
+        "date": "2026-09-23",
+        "amount": 262010,
+        "raw": "(주)벼리정밀 명절상여"
+      },
+      "rent": {
+        "payee": "오영숙",
+        "amount": 400000,
+        "day": 1,
+        "note": "분류 없음 → 사용자가 말한 월세와 금액이 같아 월세로 확인"
+      },
+      "card_bill_double_count": "매달 카드대금 이체는 카드 사용 내역과 겹치므로 지출 합계에서 뺀다",
+      "usual_monthly_spending_krw": 1449250
+    }
+  }
+}

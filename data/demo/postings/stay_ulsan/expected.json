@@ -1,0 +1,47 @@
+{
+  "_note": "정규화(normalize) 노드가 이 공고에서 뽑아야 하는 값. 테스트 정답으로 쓴다. 금액 단위는 원.",
+  "id": "stay_ulsan",
+  "company": "(주)여울케미칼",
+  "job_title": "공정관리 신입",
+  "employment_type": "정규직",
+  "probation": {
+    "months": 3,
+    "pay_rate": null
+  },
+  "location": {
+    "raw": "울산광역시 남구 부곡동 000 (석유화학단지 내)",
+    "sido": "울산광역시",
+    "sigungu": "남구",
+    "lawd_cd": "31140"
+  },
+  "salary": {
+    "type": "undisclosed",
+    "annual_krw": null,
+    "raw": "회사 내규에 따름 (동종업계 상위 수준) / 최종 합격 후 처우 협의",
+    "note": "'동종업계 상위 수준'은 금액이 아니므로 추측하지 않는다 → 손익분기 연봉 계산 대상"
+  },
+  "nontaxable_meal_monthly_krw": null,
+  "meals": "중식 제공 (회사 부담)",
+  "housing": {
+    "type": "none",
+    "monthly_cost_krw": 0,
+    "raw": "언급 없음",
+    "note": "본가에서 통근. 주거비 대신 본가에 내는 돈을 사용자에게 묻는다"
+  },
+  "commute": {
+    "shuttle_bus": true,
+    "transport_allowance_monthly_krw": null,
+    "shuttle_fee_krw": 0
+  },
+  "overtime": null,
+  "application_period": {
+    "start": "2026-09-21",
+    "end": "2026-10-11"
+  },
+  "missing_info_to_ask": [
+    "제시받은 연봉 (비공개 → 손익분기 연봉으로 대신 보여 줌)",
+    "통근 방법 (통근버스 / 자차)",
+    "본가에서 쓰는 돈 (부모님께 드리는 돈 + 본인 식비)",
+    "수습 기간 급여 비율 (공고에 없음)"
+  ]
+}
