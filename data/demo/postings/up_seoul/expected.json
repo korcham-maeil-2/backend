@@ -1,0 +1,42 @@
+{
+  "_note": "정규화(normalize) 노드가 이 메일 캡처에서 뽑아야 하는 값. 테스트 정답으로 쓴다. 금액 단위는 원.",
+  "id": "up_seoul",
+  "company": "(주)새늘소재",
+  "job_title": "기술영업 신입",
+  "employment_type": "정규직",
+  "probation": {
+    "months": 3,
+    "pay_rate": 1.0
+  },
+  "location": {
+    "raw": "서울 강서구 마곡산업단지 내 본사·연구소",
+    "sido": "서울특별시",
+    "sigungu": "강서구",
+    "lawd_cd": "11500"
+  },
+  "salary": {
+    "type": "annual",
+    "annual_krw": 40000000,
+    "raw": "40,000,000원 (세전, 12개월 균등 분할 지급)",
+    "note": "식대 월 20만원이 연봉 안에 포함됨. 연장근로수당·성과급은 금액 미정이라 계산에서 제외"
+  },
+  "nontaxable_meal_monthly_krw": 200000,
+  "meals": "별도 식사 제공 없음 (현금 식대만 지급 → 비과세 적용 가능)",
+  "housing": {
+    "type": "none",
+    "monthly_cost_krw": null,
+    "raw": "언급 없음",
+    "note": "메일에 주거 지원 언급이 없어 없음으로 계산하고 확인 목록에 넣는다"
+  },
+  "commute": {
+    "shuttle_bus": false,
+    "transport_allowance_monthly_krw": null
+  },
+  "overtime": "연장근로수당 별도 (시간 미정)",
+  "start_date": "2027-01-04",
+  "reply_deadline": "2026-11-17T18:00",
+  "missing_info_to_ask": [
+    "서울에서 구할 집의 보증금 한도 (월세는 강서구 실거래가로 추정)",
+    "주거 지원 여부 (메일에 없음 → 확인 목록)"
+  ]
+}

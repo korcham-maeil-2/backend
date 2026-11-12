@@ -1,0 +1,30 @@
+{
+  "_note": "시연용 가상 사용자. 실제 개인정보 아님. 시나리오 up_seoul, stay_ulsan에서 사용. 금액 단위는 원.",
+  "id": "user_b",
+  "label": "가상 사용자 B (울산 본가, 화학공학과 졸업 예정)",
+  "name": "서지후",
+  "age": 26,
+  "household": {
+    "size": 1,
+    "dependents": 0
+  },
+  "current_residence": {
+    "sido": "울산광역시",
+    "sigungu": "남구",
+    "lawd_cd": "31140",
+    "housing_type": "본가"
+  },
+  "scenario_inputs": {
+    "stay_ulsan": {
+      "commute": "통근버스",
+      "to_parents_monthly_krw": 300000,
+      "own_food_monthly_krw": 250000,
+      "note": "본가에서 쓰는 돈 = 부모님께 30만 + 본인 식비 25만 (질문 카드 답)"
+    },
+    "up_seoul": {
+      "max_deposit_krw": 20000000,
+      "note": "서울 보증금 한도 2,000만 (질문 카드 답). 월세는 강서구 실거래가 추정값 사용"
+    }
+  },
+  "first_message": "두 곳 다 합격했어요. 서울은 연봉 4,000만 원이고 다음 주 화요일까지 답해야 하는데, 울산도 최종 합격 연락을 받았고 처우는 따로 협의하재요. 울산은 얼마면 남는 돈이 비슷할까요?"
+}
