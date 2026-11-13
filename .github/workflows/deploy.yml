@@ -1,0 +1,70 @@
+# 배포 (CD): main의 CI가 성공하면 라즈베리파이에서 최신 main으로 다시 띄운다.
+#
+# [동작 방식]
+# - 라즈베리파이에 설치한 셀프호스티드 러너(라벨 maeil2-pi)가 이 작업을 받아 실행한다.
+#   파이가 GitHub에 먼저 연결해 작업을 가져가므로, 공유기에서 포트를 열 필요가 없다.
+# - 배포 폴더(서버에 clone해 둔 backend 저장소)에서 git pull → docker compose up -d --build.
+# - 세션 상태 SQLite는 Docker 볼륨(wolgeup-backend-data)에 있어서 재배포해도 지워지지 않는다.
+#
+# [보안] 저장소가 public이라, 이 작업은 main에 push된 CI 결과(또는 수동 실행)에서만 돈다.
+# PR(포크 포함)에서는 절대 실행되지 않는다.
+#
+# 수동 배포: GitHub 저장소 → Actions → 배포 → Run workflow
+
+name: 배포
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+# 배포가 겹치지 않게 한 번에 하나만
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: 라즈베리파이 배포
+    # 수동 실행이거나, main에 push된 CI가 성공했을 때만
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push')
+    runs-on: [self-hosted, maeil2-pi]
+    timeout-minutes: 20
+    env:
+      # 서버에 clone해 둔 배포 폴더. 저장소 Settings → Variables → DEPLOY_DIR 로 지정
+      DEPLOY_DIR: ${{ vars.DEPLOY_DIR }}
+      HEALTH_URL: ${{ vars.HEALTH_URL || 'https://maeil2-backend.sunghoyaaa.com/health' }}
+    steps:
+      - name: 최신 main 받기
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_DIR" || { echo "DEPLOY_DIR 변수가 비어 있습니다"; exit 1; }
+          cd "$DEPLOY_DIR"
+          git fetch --prune origin main
+          git checkout -q -B main origin/main
+          git log --oneline -1
+
+      - name: 다시 빌드하고 띄우기
+        run: |
+          set -euo pipefail
+          cd "$DEPLOY_DIR"
+          docker compose up -d --build --remove-orphans
+
+      - name: 동작 확인 (/health)
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS "$HEALTH_URL"; then echo; echo "배포 성공"; exit 0; fi
+            sleep 2
+          done
+          echo "health 확인 실패"
+          cd "$DEPLOY_DIR" && docker compose logs --tail 50 backend
+          exit 1
+
+      - name: 안 쓰는 이미지 정리
+        if: always()
+        run: docker image prune -f
