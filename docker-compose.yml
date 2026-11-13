@@ -4,7 +4,8 @@
 # 로그:  docker compose logs -f backend
 # 중지:  docker compose down          (볼륨의 SQLite는 남는다. 지우려면 down -v)
 #
-# 구조: 인터넷 → 서버의 Nginx(HTTPS) → 127.0.0.1:${BACKEND_PORT} → backend 컨테이너
+# 구조: 인터넷 → maeil2-backend.sunghoyaaa.com (가비아 CNAME → DDNS sunghoyaaa.serveirc.com)
+#       → 서버의 Nginx(HTTPS) → backend 컨테이너(8000)
 # 프론트 서비스는 프론트 배포 때 이 파일에 추가한다 (../frontend).
 
 services:
@@ -19,8 +20,9 @@ services:
         required: false
     environment:
       CHECKPOINT_DB_PATH: /data/checkpoints.sqlite
-      # 브라우저 호출을 허락할 프론트 주소 (쉼표로 여러 개)
-      CORS_ORIGINS: ${CORS_ORIGINS:-https://wolgeup.sunghoyaaa.com,http://localhost:3000}
+      # 브라우저 호출을 허락할 프론트 주소 (쉼표로 여러 개).
+      # 프론트 도메인이 정해지면 서버 backend/.env에 CORS_ORIGINS=https://프론트주소,http://localhost:3000
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
     volumes:
       - backend-data:/data
     # 서버 안에서만 열고(127.0.0.1), 바깥에서는 Nginx를 거쳐서만 들어오게 한다
