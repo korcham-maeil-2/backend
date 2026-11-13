@@ -12,5 +12,7 @@ var/
 .pytest_cache
 __pycache__/
 tests/
+# 시연 모드(NORMALIZE_MODE=fixture)의 미리 써 둔 답은 이미지에 넣는다 (Dockerfile 3단계)
+!tests/fixtures/
 data/demo/
 scripts/
