@@ -1,22 +1,30 @@
-"""Claude 호출 — 공고 글을 ExtractionResult 모양으로 뽑아 달라고 요청한다.
+"""Claude 호출 — 공고 글을 ExtractionResult 모양의 JSON으로 뽑아 달라고 요청한다.
 
 [주의] 개발 중에는 이 호출을 실제로 실행하지 않는다 (API 키 사용 한도 100달러).
 테스트는 가짜 클라이언트와 손으로 쓴 정답 응답(tests/fixtures/normalize/)을 쓴다.
 실제 호출은 서비스 실행 중 또는 시연 전 최종 점검 때만 한다.
 
-[구조화 출력]
-client.beta.messages.parse(output_format=Pydantic모델)을 쓰면 Claude가 그 JSON 모양으로만 답하고,
-SDK가 Pydantic 모델로 검사해서 response.parsed_output에 넣어 준다.
+[답 모양을 정하는 방법 — 프롬프트 + 코드 검사]
+처음에는 구조화 출력(output_format=ExtractionResult)으로 모양을 강제했다. 그런데 실제 API가
+"The compiled grammar is too large"(400)로 거절했다: 칸 20여 개 × (값, 인용) × '없으면 null'
+조합이 형식 강제로 다루기에 너무 크다 (2026-11-14 실제 호출로 확인, 토큰은 쓰지 않음).
+그래서 지금은
+  1) 시스템 프롬프트 끝에 ExtractionResult의 JSON Schema를 적어 주고 "JSON 하나만" 답하게 한 뒤
+  2) 받은 글을 ExtractionResult(Pydantic)로 검사한다 (칸 이름·타입·값 범위)
+  3) 모양이 틀리면 무엇이 틀렸는지 알려 주고 한 번만 다시 묻는다. 그래도 틀리면 NormalizeError(502)
+'LLM은 값과 인용만, 확인/추정은 코드가 원문과 대조해 정한다'는 원칙은 그대로다.
 
 [fallbacks='default']
 드물게 안전 분류기가 요청을 거절(stop_reason='refusal')하면, 서버가 다른 모델로 같은 요청을
 다시 돌려 준다. 공고 정리에서 거절될 일은 거의 없지만 시연 중 멈추지 않게 켜 둔다.
 """
 
+import json
 import logging
 from typing import Protocol
 
 import anthropic
+from pydantic import ValidationError
 
 from backend.normalize.schema import ExtractionResult
 
@@ -66,6 +74,14 @@ SYSTEM_PROMPT = """\
 """
 
 
+# 시스템 프롬프트 + 출력 형식. 형식은 ExtractionResult에서 만든다 (칸을 바꾸면 자동으로 따라간다).
+SYSTEM_TEXT = (
+    SYSTEM_PROMPT + '\n출력 형식: 아래 JSON Schema에 맞는 JSON 객체 하나만 답한다. '
+    '모든 칸을 빠짐없이 쓰고, 모르면 null로 둔다. 앞뒤에 설명이나 코드 블록 표시를 붙이지 않는다.\n'
+    + json.dumps(ExtractionResult.model_json_schema(), ensure_ascii=False)
+)
+
+
 class NormalizeError(Exception):
     """공고 정리(LLM 호출)가 실패했을 때. message는 사용자에게 보여 줘도 되는 한국어."""
 
@@ -93,17 +109,44 @@ class ClaudeExtractor:
         return self._client
 
     def __call__(self, text: str) -> ExtractionResult:
+        messages: list[dict] = [{'role': 'user', 'content': text}]
+        response = self._create(messages)
         try:
-            response = self.client.beta.messages.parse(
+            return parse_answer(_answer_text(response))
+        except AnswerFormatError as e:
+            # 모양이 틀렸으면 무엇이 틀렸는지 알려 주고 한 번만 다시 묻는다.
+            # 앞 답(response.content)은 생각 블록까지 그대로 돌려준다 (모델이 이어서 읽는다).
+            logger.warning('Claude 답 모양 오류, 한 번 다시 묻습니다: %s', e.summary)
+            messages += [
+                {'role': 'assistant', 'content': response.content},
+                {
+                    'role': 'user',
+                    'content': (
+                        f'앞의 답이 출력 형식에 맞지 않습니다: {e.summary}\n'
+                        '출력 형식에 맞는 JSON 하나만 다시 답해 주세요.'
+                    ),
+                },
+            ]
+        try:
+            return parse_answer(_answer_text(self._create(messages)))
+        except AnswerFormatError as e:
+            logger.error('Claude 답 모양 오류 (다시 물어도 같음): %s', e.summary)
+            raise NormalizeError('공고를 정리하는 중 문제가 생겼습니다.') from e
+
+    def _create(self, messages: list[dict]):
+        try:
+            response = self.client.beta.messages.create(
                 model=MODEL,
                 max_tokens=16000,
                 betas=[FALLBACK_BETA],
                 fallbacks='default',
                 # 옮겨 적기라 깊은 추론은 필요 없다. 기본값(high)보다 낮춰 비용·시간을 줄인다.
                 output_config={'effort': 'medium'},
-                system=SYSTEM_PROMPT,
-                messages=[{'role': 'user', 'content': text}],
-                output_format=ExtractionResult,
+                # 시스템 프롬프트(규칙 + 형식)는 매번 같아서 캐시해 두면 두 번째부터 싸진다.
+                system=[
+                    {'type': 'text', 'text': SYSTEM_TEXT, 'cache_control': {'type': 'ephemeral'}}
+                ],
+                messages=messages,
             )
         except anthropic.RateLimitError as e:
             logger.warning('Claude 요청 한도 초과 (status=%s)', e.status_code)
@@ -125,6 +168,31 @@ class ClaudeExtractor:
             raise NormalizeError('이 내용은 정리할 수 없습니다. 공고 내용만 붙여 넣어 주세요.')
         if response.stop_reason == 'max_tokens':
             raise NormalizeError('글이 너무 길어 정리하지 못했습니다. 공고를 나눠서 보내 주세요.')
-        if response.parsed_output is None:
-            raise NormalizeError('공고를 정리하는 중 문제가 생겼습니다.')
-        return response.parsed_output
+        return response
+
+
+class AnswerFormatError(Exception):
+    """Claude 답이 JSON이 아니거나 ExtractionResult 모양이 아님. summary는 다시 물을 때 쓴다."""
+
+    def __init__(self, summary: str) -> None:
+        super().__init__(summary)
+        self.summary = summary
+
+
+def _answer_text(response) -> str:
+    return ''.join(b.text for b in response.content if getattr(b, 'type', None) == 'text')
+
+
+def parse_answer(raw: str) -> ExtractionResult:
+    """답 글 → ExtractionResult. 앞뒤 설명이나 ```json 표시가 붙어도 가장 바깥 {...}만 읽는다."""
+    start, end = raw.find('{'), raw.rfind('}')
+    if start < 0 or end < start:
+        raise AnswerFormatError('JSON 객체({...})가 없습니다')
+    try:
+        return ExtractionResult.model_validate_json(raw[start : end + 1])
+    except ValidationError as e:
+        problems = '; '.join(
+            f'{".".join(str(p) for p in err["loc"]) or "(전체)"}: {err["msg"]}'
+            for err in e.errors()[:5]
+        )
+        raise AnswerFormatError(problems) from e
