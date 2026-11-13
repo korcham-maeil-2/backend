@@ -29,3 +29,6 @@ jobs:
 
       - name: Ruff 린트
         run: uv run ruff check .
+
+      - name: 테스트
+        run: uv run pytest -q

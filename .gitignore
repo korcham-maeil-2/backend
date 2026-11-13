@@ -13,3 +13,8 @@ wheels/
 .env
 .env.*
 !.env.example
+
+# 로컬 실행 데이터 (LangGraph 체크포인트 SQLite 등)
+var/
+*.sqlite
+*.sqlite-*
