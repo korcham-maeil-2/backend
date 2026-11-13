@@ -2,7 +2,7 @@
   "_note": "정규화(normalize) 노드가 이 공고에서 뽑아야 하는 값. 테스트 정답으로 쓴다. 금액 단위는 원.",
   "id": "stay_ulsan",
   "company": "(주)여울케미칼",
-  "job_title": "공정관리 신입",
+  "job_title": "공정관리",
   "employment_type": "정규직",
   "probation": {
     "months": 3,

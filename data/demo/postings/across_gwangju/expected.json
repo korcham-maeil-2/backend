@@ -2,7 +2,7 @@
   "_note": "정규화(normalize) 노드가 채팅 텍스트에서 뽑아야 하는 값. 테스트 정답으로 쓴다. 금액 단위는 원.",
   "id": "across_gwangju",
   "company": "늘찬오토텍",
-  "job_title": "품질관리 경력직",
+  "job_title": "품질관리",
   "employment_type": null,
   "location": {
     "raw": "광주 광산구 하남산단",
