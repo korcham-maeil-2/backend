@@ -89,15 +89,56 @@ def test_message_appends_and_rebuilds_table(tmp_path):
         assert s['table'] == [{'raw_text': '첫 공고\n교통비 월 10만원'}]
 
 
-def test_errors(tmp_path):
-    """잘못된 요청에 맞는 오류 코드를 돌려주는지."""
+def test_errors_use_common_shape(tmp_path):
+    """모든 실패 응답이 {code, message, details} 한 가지 모양인지 (api/errors.py의 약속)."""
     with client(tmp_path / 'cp.sqlite') as c:
-        assert c.get('/sessions/없는-세션').status_code == 404  # 없는 세션
-        assert c.post('/sessions', json={'message': ''}).status_code == 422  # 빈 메시지
+        # 없는 세션 → 404
+        r = c.get('/sessions/없는-세션')
+        assert r.status_code == 404
+        assert r.json() == {
+            'code': 'SESSION_NOT_FOUND',
+            'message': '세션을 찾을 수 없습니다.',
+            'details': None,
+        }
+
+        # 빈 메시지 → 422, details에 어느 칸이 틀렸는지
+        r = c.post('/sessions', json={'message': ''})
+        assert r.status_code == 422
+        body = r.json()
+        assert body['code'] == 'VALIDATION_ERROR'
+        assert body['message'] == '요청 형식이 올바르지 않습니다.'
+        assert body['details'][0]['field'] == 'body.message'
+
+        # 이미 끝난 세션에 다시 확인을 보내면 → 409
         sid = c.post('/sessions', json={'message': 'x'}).json()['session_id']
         c.post(f'/sessions/{sid}/confirm', json={})
-        # 이미 끝난 세션에 다시 확인을 보내면 409
-        assert c.post(f'/sessions/{sid}/confirm', json={}).status_code == 409
+        r = c.post(f'/sessions/{sid}/confirm', json={})
+        assert r.status_code == 409
+        assert r.json()['code'] == 'SESSION_NOT_AWAITING_CONFIRMATION'
+
+        # 없는 주소 → 404, 틀린 메서드 → 405 (FastAPI 기본 에러도 같은 모양으로 바뀌는지)
+        assert c.get('/없는-주소').json()['code'] == 'NOT_FOUND'
+        r = c.delete('/sessions')
+        assert r.status_code == 405
+        assert r.json()['code'] == 'METHOD_NOT_ALLOWED'
+
+
+def test_unexpected_error_hides_internals(tmp_path):
+    """예상 못 한 버그(500)도 같은 모양이고, 내부 오류 내용은 응답에 드러내지 않는다."""
+    app = create_app(str(tmp_path / 'cp.sqlite'))
+
+    @app.get('/boom')
+    def boom():
+        raise RuntimeError('비밀 내부 정보')
+
+    # raise_server_exceptions=False: 테스트에서도 실제 서버처럼 500 응답을 받아 보기 위한 설정
+    with TestClient(app, raise_server_exceptions=False) as c:
+        r = c.get('/boom', headers={'Origin': 'http://localhost:3000'})
+        assert r.status_code == 500
+        assert r.json()['code'] == 'INTERNAL_ERROR'
+        assert '비밀' not in r.text
+        # 500에도 CORS 허락 헤더가 있어야 브라우저(프론트)가 이 에러 본문을 읽을 수 있다
+        assert r.headers.get('access-control-allow-origin') == 'http://localhost:3000'
 
 
 def test_cors_allows_frontend_dev_origin(tmp_path):

@@ -19,10 +19,11 @@ async def 함수 안의 await는 "DB나 그래프 작업이 끝날 때까지 기
 
 import uuid
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, Request, status
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
 
+from backend.api.errors import AppError, ErrorCode, error_responses
 from backend.api.schemas import (
     ConfirmRequest,
     MessageRequest,
@@ -32,7 +33,10 @@ from backend.api.schemas import (
 
 # APIRouter: 관련된 주소들을 묶는 단위. prefix='/sessions'라서 아래 '/{session_id}'는
 # 실제로 '/sessions/{session_id}'가 된다. tags는 /docs 화면에서 묶어 보여 줄 이름.
-router = APIRouter(prefix='/sessions', tags=['sessions'])
+# responses=error_responses(422, 500): 이 라우터의 모든 주소가
+# 422(입력 형식 오류)·500(서버 오류) 때 공통 에러 모양을 돌려준다고 /docs와 프론트 타입에 알린다.
+# 주소별 에러(404·409)는 각 함수에 적는다.
+router = APIRouter(prefix='/sessions', tags=['sessions'], responses=error_responses(422, 500))
 
 
 def _graph(request: Request) -> CompiledStateGraph:
@@ -58,8 +62,11 @@ async def _snapshot(graph: CompiledStateGraph, session_id: str) -> SessionRespon
     snap = await graph.aget_state(_config(session_id))
     if not snap.values:
         # 한 번도 실행된 적 없는 세션 → 404 Not Found.
-        # HTTPException을 raise하면 FastAPI가 그 상태 코드와 메시지로 응답한다.
-        raise HTTPException(status.HTTP_404_NOT_FOUND, '세션을 찾을 수 없습니다.')
+        # AppError를 raise하면 errors.py의 처리기가 공통 에러 모양으로 응답한다:
+        #   {"code": "SESSION_NOT_FOUND", "message": "세션을 찾을 수 없습니다.", "details": null}
+        raise AppError(
+            status.HTTP_404_NOT_FOUND, ErrorCode.SESSION_NOT_FOUND, '세션을 찾을 수 없습니다.'
+        )
 
     # 멈춰 있다면, confirm_table 노드가 interrupt()에 넘긴 값을 꺼낸다.
     pending = None
@@ -90,6 +97,8 @@ async def _snapshot(graph: CompiledStateGraph, session_id: str) -> SessionRespon
 # body: MessageRequest → 요청 JSON을 MessageRequest 모양으로 검사해서 넣어 준다.
 # request: Request    → 앱 정보(app.state.graph)에 접근하려고 받는다.
 # 반환 타입(-> SessionResponse)이 응답 JSON 모양이 된다. status_code=201은 '새로 만들었음'.
+# 아래 다른 함수의 responses=error_responses(404) 같은 표시는
+# 그 주소에서만 날 수 있는 실패 상태 코드를 /docs·프론트 타입에 알리는 것이다.
 @router.post('', status_code=status.HTTP_201_CREATED)
 async def start_session(body: MessageRequest, request: Request) -> SessionResponse:
     """세션을 만들고 첫 메시지로 그래프를 실행한다. 비교표 확인 단계에서 멈춘다."""
@@ -101,7 +110,7 @@ async def start_session(body: MessageRequest, request: Request) -> SessionRespon
     return await _snapshot(graph, session_id)
 
 
-@router.post('/{session_id}/messages')
+@router.post('/{session_id}/messages', responses=error_responses(404))
 async def send_message(session_id: str, body: MessageRequest, request: Request) -> SessionResponse:
     """같은 세션에 메시지를 더한다. 이전 메시지와 합쳐 비교표부터 다시 만든다.
 
@@ -115,7 +124,7 @@ async def send_message(session_id: str, body: MessageRequest, request: Request) 
     return await _snapshot(graph, session_id)
 
 
-@router.post('/{session_id}/confirm')
+@router.post('/{session_id}/confirm', responses=error_responses(404, 409))
 async def confirm_table(session_id: str, body: ConfirmRequest, request: Request) -> SessionResponse:
     """비교표 확인 = 멈춘 그래프를 다시 깨운다(interrupt 재개).
 
@@ -125,7 +134,11 @@ async def confirm_table(session_id: str, body: ConfirmRequest, request: Request)
     current = await _snapshot(graph, session_id)
     if current.status != 'awaiting_confirmation':
         # 409 Conflict: 지금 상태와 맞지 않는 요청 (예: 이미 끝난 세션에 또 확인을 보냄)
-        raise HTTPException(status.HTTP_409_CONFLICT, '비교표 확인을 기다리는 세션이 아닙니다.')
+        raise AppError(
+            status.HTTP_409_CONFLICT,
+            ErrorCode.SESSION_NOT_AWAITING_CONFIRMATION,
+            '비교표 확인을 기다리는 세션이 아닙니다.',
+        )
     # Command(resume=값): "멈춘 곳에서 이 값을 답으로 넣고 이어서 실행해"라는 명령.
     # 이 값이 nodes.confirm_table 안의 interrupt()가 돌려주는 answer가 된다.
     # body.model_dump(): Pydantic 모델 → 평범한 dict ({'approved': True, 'table': None})
@@ -133,7 +146,7 @@ async def confirm_table(session_id: str, body: ConfirmRequest, request: Request)
     return await _snapshot(graph, session_id)
 
 
-@router.get('/{session_id}')
+@router.get('/{session_id}', responses=error_responses(404))
 async def get_session(session_id: str, request: Request) -> SessionResponse:
     """현재 상태와 결과를 조회한다 (그래프는 실행하지 않고 저장된 값만 읽는다)."""
     return await _snapshot(_graph(request), session_id)

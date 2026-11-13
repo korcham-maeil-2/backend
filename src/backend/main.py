@@ -18,6 +18,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
+from backend.api.errors import register_error_handlers
 from backend.api.sessions import router as sessions_router
 from backend.graph import build_graph
 
@@ -51,6 +52,10 @@ def create_app(db_path: str | None = None) -> FastAPI:
             yield
 
     app = FastAPI(title='월급지도 API', version='0.1.0', lifespan=lifespan)
+
+    # 실패 응답을 모두 {code, message, details} 한 가지 모양으로 맞춘다 (api/errors.py 참고).
+    # 순서 주의: 반드시 CORS 설정보다 먼저 불러야 500 에러 응답에도 CORS 헤더가 붙는다.
+    register_error_handlers(app)
 
     # [CORS — 다른 주소의 웹페이지가 이 서버를 부를 수 있게 허락하기]
     # 브라우저는 보안 때문에 localhost:3000(프론트)에서 localhost:8000(백엔드)으로 가는 요청을
