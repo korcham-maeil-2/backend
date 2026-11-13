@@ -1,0 +1,87 @@
+{
+  "_note": "Claude 응답 대신 쓰는 손으로 쓴 fixture (실제 API 호출 아님). 입력: up_seoul.input.txt",
+  "postings": [
+    {
+      "company": {
+        "value": "(주)새늘소재",
+        "quote": "(주)새늘소재 인사팀입니다."
+      },
+      "job_title": {
+        "value": "기술영업 신입",
+        "quote": "기술영업 (신입)"
+      },
+      "employment_type": {
+        "value": "정규직",
+        "quote": "정규직, 수습 3개월"
+      },
+      "hiring_track": {
+        "value": "신입",
+        "quote": "기술영업 (신입)"
+      },
+      "location": {
+        "value": {
+          "sido": "서울",
+          "sigungu": "강서구"
+        },
+        "quote": "서울 강서구 마곡산업단지 내 본사·연구소"
+      },
+      "salary_type": {
+        "value": "annual",
+        "quote": "40,000,000원 (세전, 12개월 균등 분할 지급)"
+      },
+      "annual_salary_krw": {
+        "value": 40000000,
+        "quote": "40,000,000원 (세전, 12개월 균등 분할 지급)"
+      },
+      "monthly_salary_krw": {
+        "value": null,
+        "quote": null
+      },
+      "meal_allowance_monthly_krw": {
+        "value": 200000,
+        "quote": "월 200,000원 현금 지급, 연봉에 포함"
+      },
+      "meal_allowance_in_salary": {
+        "value": true,
+        "quote": "월 200,000원 현금 지급, 연봉에 포함"
+      },
+      "meals_provided": {
+        "value": false,
+        "quote": "별도 식사 제공 없음"
+      },
+      "housing_allowance_monthly_krw": {
+        "value": null,
+        "quote": null
+      },
+      "housing_allowance_months": {
+        "value": null,
+        "quote": null
+      },
+      "company_housing": {
+        "value": null,
+        "quote": null
+      },
+      "shuttle_bus": {
+        "value": null,
+        "quote": null
+      },
+      "transport_allowance_monthly_krw": {
+        "value": null,
+        "quote": null
+      },
+      "other_allowances": [],
+      "probation_months": {
+        "value": 3,
+        "quote": "수습 3개월"
+      },
+      "probation_pay_rate": {
+        "value": 1.0,
+        "quote": "수습 기간 급여 100% 지급"
+      },
+      "overtime": {
+        "value": "연장근로수당 별도 (시간 미정)",
+        "quote": "연장근로수당 별도"
+      }
+    }
+  ]
+}

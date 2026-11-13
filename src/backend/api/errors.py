@@ -42,6 +42,7 @@ class ErrorCode(StrEnum):
     # 우리 서비스가 직접 내는 에러
     SESSION_NOT_FOUND = 'SESSION_NOT_FOUND'  # 404: 없는 세션 ID
     SESSION_NOT_AWAITING_CONFIRMATION = 'SESSION_NOT_AWAITING_CONFIRMATION'  # 409
+    NORMALIZE_FAILED = 'NORMALIZE_FAILED'  # 502: 공고 정리(Claude 호출) 실패
     # 공통 에러 (FastAPI가 자동으로 내는 것을 바꿔 담는다)
     VALIDATION_ERROR = 'VALIDATION_ERROR'  # 422: 요청 JSON 모양이 틀림
     NOT_FOUND = 'NOT_FOUND'  # 404: 없는 주소

@@ -21,6 +21,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from backend.api.errors import register_error_handlers
 from backend.api.sessions import router as sessions_router
 from backend.graph import build_graph
+from backend.normalize import Extractor
 
 # 그래프 상태를 저장할 SQLite 파일 위치 (Docker에서는 이 경로를 볼륨에 둔다).
 # SQLite는 별도 DB 서버 없이 파일 하나로 동작하는 데이터베이스다.
@@ -30,11 +31,13 @@ DEFAULT_DB_PATH = 'var/checkpoints.sqlite'
 DEFAULT_CORS_ORIGINS = 'http://localhost:3000'
 
 
-def create_app(db_path: str | None = None) -> FastAPI:
+def create_app(db_path: str | None = None, extractor: Extractor | None = None) -> FastAPI:
     """FastAPI 앱을 만들어 돌려준다.
 
     함수로 감싼 이유: 테스트에서 매번 새 임시 DB 파일로 앱을 따로 만들 수 있게 하려고.
     db_path를 안 주면 환경 변수 CHECKPOINT_DB_PATH, 그것도 없으면 기본 경로를 쓴다.
+    extractor: 공고 정리에 쓸 LLM 호출. 안 주면 실제 Claude(ANTHROPIC_API_KEY 필요).
+      테스트는 API를 부르지 않도록 항상 가짜를 넣는다.
     """
     db_path = db_path or os.getenv('CHECKPOINT_DB_PATH', DEFAULT_DB_PATH)
 
@@ -48,7 +51,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
         # 'Async'는 DB를 기다리는 동안 서버가 다른 요청도 처리할 수 있다는 뜻(비동기).
         async with AsyncSqliteSaver.from_conn_string(db_path) as saver:
             # app.state: 앱 전체에서 같이 쓰는 보관함. 요청 처리 함수들이 여기서 그래프를 꺼내 쓴다.
-            app.state.graph = build_graph(saver)
+            app.state.graph = build_graph(saver, extractor)
             yield
 
     app = FastAPI(title='월급지도 API', version='0.1.0', lifespan=lifespan)

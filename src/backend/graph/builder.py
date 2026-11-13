@@ -11,10 +11,16 @@ from langgraph.graph.state import CompiledStateGraph
 
 from backend.graph import nodes
 from backend.graph.state import GraphState
+from backend.normalize import ClaudeExtractor, Extractor
 
 
-def build_graph(checkpointer: BaseCheckpointSaver) -> CompiledStateGraph:
+def build_graph(
+    checkpointer: BaseCheckpointSaver, extractor: Extractor | None = None
+) -> CompiledStateGraph:
     """그래프를 만들어 돌려준다.
+
+    extractor: normalize 노드가 쓸 'LLM으로 공고 뽑기' 함수.
+      안 주면 실제 Claude를 부르는 ClaudeExtractor를 쓴다. 테스트에서는 가짜를 넣는다.
 
     checkpointer(체크포인터): 그래프 상태를 저장해 두는 저장소.
       - 노드가 하나 끝날 때마다 그때의 상태를 저장한다.
@@ -27,7 +33,7 @@ def build_graph(checkpointer: BaseCheckpointSaver) -> CompiledStateGraph:
 
     # 2) 노드 등록: add_node('이름', 함수)
     builder.add_node('route_input', nodes.route_input)
-    builder.add_node('normalize', nodes.normalize)
+    builder.add_node('normalize', nodes.make_normalize(extractor or ClaudeExtractor()))
     builder.add_node('confirm_table', nodes.confirm_table)
     builder.add_node('calculate', nodes.calculate)
     builder.add_node('write_report', nodes.write_report)

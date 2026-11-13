@@ -9,13 +9,16 @@ Pydantic 모델(BaseModel을 상속한 클래스)은 "JSON이 이런 모양이�
 
 Field(...): 칸마다 기본값, 검사 조건, 설명(description)을 붙이는 도구. 설명은 /docs 화면에 나온다.
 
-비교표 한 행의 상세 칸은 normalize(#5)에서 정하므로
-지금은 dict[str, Any](아무 키나 되는 dict)로 둔다.
+비교표 한 행은 ComparisonRow (backend/normalize/schema.py)다.
+칸마다 {value, status, source_text} 모양이라
+프론트가 확인/추정/사용자 입력/공고에 없음을 표시할 수 있다.
 """
 
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+
+from backend.normalize.schema import ComparisonRow
 
 # 세션 상태 3가지
 #   awaiting_confirmation: 비교표 확인을 기다리며 멈춰 있음
@@ -39,8 +42,9 @@ class ConfirmRequest(BaseModel):
 
     approved: bool = True
     # `X | None = None`: 이 칸은 안 보내도 된다(없으면 None).
-    table: list[dict[str, Any]] | None = Field(
-        default=None, description='사용자가 비교표를 고쳤을 때만 보낸다'
+    table: list[ComparisonRow] | None = Field(
+        default=None,
+        description='사용자가 비교표를 고쳤을 때만 보낸다. 고친 칸은 status를 user_input으로',
     )
 
 
@@ -62,7 +66,7 @@ class SessionResponse(BaseModel):
     )
     # default_factory=list: 기본값을 빈 리스트로. (default=[]로 쓰면 모든 응답이
     # 같은 리스트를 나눠 쓰는 실수가 생길 수 있어 이렇게 쓴다)
-    table: list[dict[str, Any]] = Field(default_factory=list, description='비교표')
+    table: list[ComparisonRow] = Field(default_factory=list, description='비교표 (공고 1건 = 1행)')
     table_confirmed: bool = False
     result: dict[str, Any] | None = None
     report: str | None = None
