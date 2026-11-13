@@ -23,6 +23,13 @@ RUN uv sync --locked --no-dev --no-install-project
 COPY src ./src
 RUN uv sync --locked --no-dev
 
+# 3) 코드가 실행 중에 읽는 파일
+#    - data/lawd_codes.csv: 공고 근무지 → 지역 코드 (공고 정리에 필요)
+#    - tests/fixtures/{normalize,transcribe}: NORMALIZE_MODE=fixture(시연 모드, 비용 0원)의 미리 써 둔 답
+#    (테스트 코드 자체는 .dockerignore로 빠진다)
+COPY data/lawd_codes.csv ./data/
+COPY tests/fixtures ./tests/fixtures
+
 # .venv 안의 실행 파일(uvicorn 등)을 바로 쓸 수 있게
 ENV PATH="/app/.venv/bin:$PATH" \
     CHECKPOINT_DB_PATH=/data/checkpoints.sqlite
