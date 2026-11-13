@@ -38,6 +38,7 @@ from backend.normalize.schema import (
     RateCell,
     SalaryTypeCell,
     TextCell,
+    _Cell,
 )
 
 REGION_QUESTION = '근무지 시·군·구 확인 (공고 표기로 지역 코드를 정하지 못함)'
@@ -256,11 +257,16 @@ def _build_row(p: ExtractedPosting, text: str, row_id: str) -> tuple[ComparisonR
     return row, region_ok
 
 
-def _money_cells(row: ComparisonRow) -> list[MoneyCell]:
+def _cells(row: ComparisonRow) -> list[_Cell]:
+    """행의 모든 칸 (기타 수당 칸 포함)."""
     cells = [getattr(row, k) for k in ComparisonRow.model_fields]
-    return [c for c in cells if isinstance(c, MoneyCell)] + [
+    return [c for c in cells if isinstance(c, _Cell)] + [
         a.monthly_krw for a in row.other_allowances
     ]
+
+
+def _money_cells(row: ComparisonRow) -> list[MoneyCell]:
+    return [c for c in _cells(row) if isinstance(c, MoneyCell)]
 
 
 def _flag_shared_quotes(rows: list[ComparisonRow], text: str) -> None:
@@ -287,11 +293,39 @@ def _flag_shared_quotes(rows: list[ComparisonRow], text: str) -> None:
                 cell.status = 'estimated'
 
 
-def build_rows(result: ExtractionResult, text: str) -> list[ComparisonRow]:
-    """LLM 답 전체 → 비교표. 행 ID는 posting-1, posting-2 … 순서."""
+def _mark_from_image(rows: list[ComparisonRow], plain_text: str) -> None:
+    """근거 인용이 '이미지에서 옮겨 적은 글'에만 있는 칸에 from_image 표시를 한다.
+
+    이미지 글은 AI가 옮겨 적은 것이라, 인용이 그 글에 있어도 원본 이미지와 같다는 보장은 없다.
+    그래서 status(확인/추정)는 그대로 두되, 화면이 '이미지에서 읽음'을 따로 보여 주게 한다.
+    """
+    plain = checks.squash(plain_text)  # 칸마다 다시 정리하지 않게 한 번만
+    for row in rows:
+        quoted = [c for c in _cells(row) if c.source_text]
+        image_only = [c for c in quoted if checks.squash(c.source_text) not in plain]
+        # 공고(행) 단위로 정한다: 붙여 넣은 다른 공고에 '수습 3개월'처럼 흔한 구절이 있으면
+        # 그 칸만 우연히 '이미지 아님'이 된다. 회사명이 이미지에만 있거나 인용 절반 이상이
+        # 이미지에만 있으면 이 공고는 이미지에서 읽은 것으로 보고, 인용이 있는 칸을 모두 표시한다.
+        company_from_image = any(c is row.company for c in image_only)
+        if company_from_image or len(image_only) * 2 >= len(quoted) > 0:
+            image_only = quoted
+        for cell in image_only:
+            cell.from_image = True
+
+
+def build_rows(
+    result: ExtractionResult, text: str, plain_text: str | None = None
+) -> list[ComparisonRow]:
+    """LLM 답 전체 → 비교표. 행 ID는 posting-1, posting-2 … 순서.
+
+    plain_text: text 가운데 이미지에서 옮겨 적은 글을 뺀 부분 (붙여 넣은 글, PDF·엑셀에서 꺼낸 글).
+      주면 인용이 여기에 없는 칸을 from_image로 표시한다. 안 주면 이미지 글이 없다고 본다.
+    """
     built = [_build_row(p, text, f'posting-{i}') for i, p in enumerate(result.postings, start=1)]
     rows = [row for row, _ in built]
     _flag_shared_quotes(rows, text)
+    if plain_text is not None:
+        _mark_from_image(rows, plain_text)
     for row, region_ok in built:
         row.questions_to_ask = make_questions(row, region_ok)
     return rows

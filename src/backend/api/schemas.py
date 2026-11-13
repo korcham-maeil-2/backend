@@ -18,6 +18,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from backend.inputs.limits import MAX_MESSAGE_CHARS
+from backend.inputs.read import InputKind, ReadMethod
 from backend.normalize.schema import ComparisonRow
 
 # 세션 상태 3가지
@@ -30,8 +32,12 @@ SessionStatus = Literal['awaiting_confirmation', 'completed', 'running']
 class MessageRequest(BaseModel):
     """세션 시작·메시지 보내기 요청. 예: {"message": "판교 백엔드 신입 연봉 3,600만원"}"""
 
-    # min_length=1: 빈 문자열은 받지 않는다 (보내면 422).
-    message: str = Field(min_length=1, description='사용자가 보낸 문장 (공고 내용, 조건 등)')
+    # min_length=1: 빈 문자열은 받지 않는다 (보내면 422). 너무 긴 글도 422 (정리 비용·시간 상한).
+    message: str = Field(
+        min_length=1,
+        max_length=MAX_MESSAGE_CHARS,
+        description='사용자가 보낸 문장 (공고 내용, 조건 등)',
+    )
 
 
 class ConfirmRequest(BaseModel):
@@ -55,6 +61,26 @@ class PendingQuestion(BaseModel):
     payload: dict[str, Any]
 
 
+class InputSummary(BaseModel):
+    """올린 파일 하나를 어떻게 읽었는지. 원본 파일은 서버에 저장하지 않는다."""
+
+    index: int = Field(description='올린 순서 (1부터). 글 속 "--- 파일 N ---"의 N')
+    name: str = Field(description='파일 이름 (화면 표시용, 글에는 넣지 않는다)')
+    kind: InputKind
+    method: ReadMethod = Field(
+        description=(
+            'text=글자를 그대로 꺼냄(0원), vision=AI가 이미지 글자를 옮겨 적음, '
+            'ocr=스캔 PDF에 숨은 기계 인식 글자, mixed=쪽마다 다름'
+        )
+    )
+    pages: int | None = Field(default=None, description='PDF 쪽 수')
+    vision_pages: int = Field(default=0, description='이미지 인식으로 읽은 장 수')
+    unreadable: int = Field(default=0, description='옮겨 적다가 [읽을 수 없음]으로 남긴 곳 수')
+    ignored_images: int = Field(
+        default=0, description='PDF 글자 쪽 안에서 읽지 않은 큰 그림 수 (표를 캡처해 붙인 경우 등)'
+    )
+
+
 class SessionResponse(BaseModel):
     """모든 세션 API가 돌려주는 공통 응답. 프론트는 status를 보고 어떤 화면을 띄울지 정한다."""
 
@@ -68,5 +94,13 @@ class SessionResponse(BaseModel):
     # 같은 리스트를 나눠 쓰는 실수가 생길 수 있어 이렇게 쓴다)
     table: list[ComparisonRow] = Field(default_factory=list, description='비교표 (공고 1건 = 1행)')
     table_confirmed: bool = False
+    inputs: list[InputSummary] = Field(default_factory=list, description='올린 파일 요약')
+    input_text: str = Field(
+        default='',
+        description=(
+            '비교표를 만들 때 쓴 글 전체 (붙여 넣은 글 + 파일에서 읽은 글). '
+            '확인을 마친 세션을 다시 고칠 때 이 글로 새 세션을 만든다'
+        ),
+    )
     result: dict[str, Any] | None = None
     report: str | None = None

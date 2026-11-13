@@ -78,6 +78,7 @@ def test_state_survives_restart_in_sqlite(tmp_path):
             'value': 33000000,
             'status': 'user_input',
             'source_text': None,
+            'from_image': False,
         }
         done = c.post(f'/sessions/{sid}/confirm', json={'approved': True, 'table': edited}).json()
         assert done['status'] == 'completed'
