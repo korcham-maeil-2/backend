@@ -610,3 +610,18 @@ def test_hiring_track():
     gwangju = row_for('across_gwangju')
     assert gwangju.hiring_track.status == 'confirmed'
     assert gwangju.employment_type.status == 'missing'  # '경력직'은 고용형태가 아니다
+
+
+def test_out_of_range_llm_values_are_dropped():
+    """LLM이 범위를 벗어난 값(110%, 음수 금액)을 내도 서버가 죽지 않고 '공고에 없음'으로 둔다."""
+    from backend.normalize.schema import ExtractedMoney, ExtractedRate
+
+    text = '수습 기간 급여 110%, 식대 -5만원'
+    row = _posting_with(
+        text,
+        probation_pay_rate=ExtractedRate(value=1.1, quote='수습 기간 급여 110%'),
+        meal_allowance_monthly_krw=ExtractedMoney(value=-50000, quote='식대 -5만원'),
+    )
+    assert row.probation_pay_rate.value is None
+    assert row.probation_pay_rate.status == 'missing'
+    assert row.meal_allowance_monthly_krw.value is None

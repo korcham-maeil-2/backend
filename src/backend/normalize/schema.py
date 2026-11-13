@@ -55,16 +55,22 @@ class TextCell(_Cell):
     value: str | None = None
 
 
+# 값 범위. 터무니없는 값(20자리 금액, 1000%)은 API에서 422로 막는다.
+# (범위가 없으면 아주 큰 숫자가 체크포인터 저장 단계까지 가서 500이 난다)
+MAX_KRW = 10**12  # 1조 원
+MAX_MONTHS = 1200  # 100년
+
+
 class MoneyCell(_Cell):
-    value: int | None = Field(default=None, description='금액(원)')
+    value: int | None = Field(default=None, ge=0, le=MAX_KRW, description='금액(원)')
 
 
 class IntCell(_Cell):
-    value: int | None = None
+    value: int | None = Field(default=None, ge=0, le=MAX_MONTHS, description='개월 수')
 
 
 class RateCell(_Cell):
-    value: float | None = Field(default=None, description='비율. 90%면 0.9')
+    value: float | None = Field(default=None, ge=0, le=1, description='비율. 90%면 0.9')
 
 
 class BoolCell(_Cell):

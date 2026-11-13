@@ -17,6 +17,8 @@ from typing import Literal
 
 from backend.normalize import checks
 from backend.normalize.schema import (
+    MAX_KRW,
+    MAX_MONTHS,
     BoolCell,
     ComparisonRow,
     ExtractedBool,
@@ -89,8 +91,14 @@ def salary_type_cell(e: ExtractedSalaryType, text: str) -> SalaryTypeCell:
     )
 
 
+def _within(value, low, high):
+    """LLM이 범위를 벗어난 값(음수, 1조 원 초과, 100% 초과)을 내면 버린다 (공고에 없음 취급)."""
+    return value if value is None or low <= value <= high else None
+
+
 def money_cell(e: ExtractedMoney, text: str, per: Literal['year', 'month']) -> MoneyCell:
     """금액 칸. per='year'는 연봉, per='month'는 월급·식대·교통비 같은 월 금액."""
+    e = ExtractedMoney(value=_within(e.value, 0, MAX_KRW), quote=e.quote)
 
     def matches(q: str) -> bool:
         if checks.is_range(q):
@@ -110,6 +118,7 @@ def money_cell(e: ExtractedMoney, text: str, per: Literal['year', 'month']) -> M
 
 
 def months_cell(e: ExtractedInt, text: str) -> IntCell:
+    e = ExtractedInt(value=_within(e.value, 0, MAX_MONTHS), quote=e.quote)
     return IntCell(
         value=e.value,
         status=_status(e.value, e.quote, text, lambda q: e.value in checks.months_in(q)),
@@ -118,6 +127,7 @@ def months_cell(e: ExtractedInt, text: str) -> IntCell:
 
 
 def rate_cell(e: ExtractedRate, text: str) -> RateCell:
+    e = ExtractedRate(value=_within(e.value, 0, 1), quote=e.quote)
     return RateCell(
         value=e.value,
         status=_status(e.value, e.quote, text, lambda q: round(e.value, 4) in checks.rates_in(q)),
