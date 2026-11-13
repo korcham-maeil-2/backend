@@ -1,0 +1,16 @@
+# 이미지에 넣지 않을 것 (키·로컬 데이터·캐시)
+.env
+.env.*
+!.env.example
+.venv
+var/
+*.sqlite
+*.sqlite-*
+.git
+.github
+.ruff_cache
+.pytest_cache
+__pycache__/
+tests/
+data/demo/
+scripts/
