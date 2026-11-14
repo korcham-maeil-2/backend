@@ -26,6 +26,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 from test_normalize import KNOWN_DIFFERENCES, actual, expected_pairs
 
+from backend.claude import MODEL
 from backend.inputs import detect, sheet
 from backend.inputs.errors import FileInputError, InputErrorCode, ReadError
 from backend.inputs.image import encode_for_vision, prepare_image, split_tall
@@ -59,7 +60,6 @@ from backend.inputs.transcribe import (
 )
 from backend.main import create_app
 from backend.normalize import FixtureExtractor, build_rows, checks
-from backend.normalize.llm import MODEL
 
 # ── 준비물 ───────────────────────────────────────────────────────
 

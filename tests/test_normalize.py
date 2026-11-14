@@ -17,6 +17,7 @@ import pytest
 from conftest import SCENARIOS, scenario_expected, scenario_llm, scenario_text
 from fastapi.testclient import TestClient
 
+from backend.claude import MODEL
 from backend.main import create_app
 from backend.normalize import (
     ClaudeExtractor,
@@ -25,7 +26,6 @@ from backend.normalize import (
     NormalizeError,
     checks,
 )
-from backend.normalize.llm import MODEL
 from backend.normalize.rows import REGION_QUESTION, build_rows
 
 # expected.json은 '언급 없음'도 false로 적은 곳이 있다. 우리 스키마는 '언급 없음'을
