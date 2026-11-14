@@ -1,0 +1,44 @@
+{
+  "down_naju.png": {
+    "sha256": "d79e3d1befb3b28039110c66708a6fbd923fd148d78acea2f9553d1b0fb86454",
+    "transcript": "down_naju.png.txt",
+    "source": "data/demo/postings/down_naju/down_naju.png",
+    "transcribed_by": "claude-sonnet-5-5, 2026-11-14 실제 호출 (ClaudeTranscriber)"
+  },
+  "down_naju_image.pdf": {
+    "sha256": "8033094a570aedbef7332f40744adb663d76a31d012a57faf62b43aeb099db21",
+    "transcript": "down_naju_image.pdf.txt",
+    "source": "data/demo/postings/down_naju/down_naju_image.pdf",
+    "transcribed_by": "claude-sonnet-5-5, 2026-11-14 실제 호출 (ClaudeTranscriber)"
+  },
+  "near_pangyo.png": {
+    "sha256": "ae1a4359efc587d2d0418950fa5c1789255fe048880da943a09dd65d9a0a2c6e",
+    "transcript": "near_pangyo.png.txt",
+    "source": "data/demo/postings/near_pangyo/near_pangyo.png",
+    "transcribed_by": "claude-sonnet-5-5, 2026-11-14 실제 호출 (ClaudeTranscriber)"
+  },
+  "near_pangyo_image.pdf": {
+    "sha256": "a1adbef194d4e6dc2d4f352ebbe32d593243c0eaaa86e34fafc563f463584b02",
+    "transcript": "near_pangyo_image.pdf.txt",
+    "source": "data/demo/postings/near_pangyo/near_pangyo_image.pdf",
+    "transcribed_by": "claude-sonnet-5-5, 2026-11-14 실제 호출 (ClaudeTranscriber)"
+  },
+  "stay_ulsan.png": {
+    "sha256": "05c39a261284fc52520d93a5dc9a49255c021a6b77d05b7bc8379dd50ed86f4b",
+    "transcript": "stay_ulsan.png.txt",
+    "source": "data/demo/postings/stay_ulsan/stay_ulsan.png",
+    "transcribed_by": "claude-sonnet-5-5, 2026-11-14 실제 호출 (ClaudeTranscriber)"
+  },
+  "stay_ulsan_image.pdf": {
+    "sha256": "b134d1cb73a4299b807086997c87fa5e2b6617c6132235ee5438d77f687c82a8",
+    "transcript": "stay_ulsan_image.pdf.txt",
+    "source": "data/demo/postings/stay_ulsan/stay_ulsan_image.pdf",
+    "transcribed_by": "claude-sonnet-5-5, 2026-11-14 실제 호출 (ClaudeTranscriber)"
+  },
+  "up_seoul_offer_mail.png": {
+    "sha256": "808ca94b9c4e65b959d6c4e924841a064ff9f54cdf60135952778a563a1e31f6",
+    "transcript": "up_seoul_offer_mail.png.txt",
+    "source": "data/demo/postings/up_seoul/up_seoul_offer_mail.png",
+    "transcribed_by": "claude-sonnet-5-5, 2026-11-14 실제 호출 (ClaudeTranscriber)"
+  }
+}

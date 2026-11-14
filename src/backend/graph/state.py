@@ -14,10 +14,7 @@ LangGraph는 "노드(함수)들을 화살표로 이은 그래프"를 실행하�
 """
 
 import operator
-from typing import Annotated, Any, Literal, TypedDict
-
-# Literal: 이 값들 중 하나만 올 수 있다는 뜻 (오타 방지용 타입 표시).
-InputKind = Literal['text', 'image', 'pdf', 'sheet']
+from typing import Annotated, Any, TypedDict
 
 
 # TypedDict: "이런 키를 가진 dict"라는 설계도. 실행 중에는 그냥 평범한 dict다.
@@ -29,8 +26,12 @@ class GraphState(TypedDict, total=False):
     # 이 표시가 없는 아래 칸들은 노드가 새 값을 돌려주면 그 값으로 덮어쓴다.
     messages: Annotated[list[str], operator.add]
 
-    # 입력 종류 (텍스트·이미지·PDF·엑셀). route_input 노드가 정한다.
-    input_kind: InputKind
+    # messages 가운데 이미지에서 옮겨 적은 글 (이미지·이미지 PDF·스캔 PDF의 OCR 글자).
+    # normalize가 인용이 이 글에만 있는 칸을 '이미지에서 읽음'으로 표시하는 데 쓴다.
+    image_texts: Annotated[list[str], operator.add]
+
+    # 올린 파일 요약 (이름·종류·읽은 방법). 원본 파일은 저장하지 않는다 (backend/inputs/read.py).
+    inputs: Annotated[list[dict[str, Any]], operator.add]
 
     # 비교표: 공고 1건이 한 행. normalize 노드가 만들고, 사용자가 확인·수정한다.
     table: list[dict[str, Any]]

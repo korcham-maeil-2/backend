@@ -49,6 +49,13 @@ class _Cell(BaseModel):
 
     status: FieldStatus = Field(default='missing', description=_STATUS_DESC)
     source_text: str | None = Field(default=None, description='근거가 된 원문 조각')
+    from_image: bool = Field(
+        default=False,
+        description=(
+            '근거(source_text)가 이미지에서 옮겨 적은 글에만 있음. '
+            'AI가 옮겨 적은 글과 맞는다는 뜻이라, 원본 이미지와 한 번 더 비교해야 한다'
+        ),
+    )
 
 
 class TextCell(_Cell):

@@ -2,7 +2,7 @@
   "_note": "정규화(normalize) 노드가 이 메일 캡처에서 뽑아야 하는 값. 테스트 정답으로 쓴다. 금액 단위는 원.",
   "id": "up_seoul",
   "company": "(주)새늘소재",
-  "job_title": "기술영업 신입",
+  "job_title": "기술영업",
   "employment_type": "정규직",
   "probation": {
     "months": 3,

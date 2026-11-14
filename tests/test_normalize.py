@@ -353,6 +353,7 @@ def test_session_api_returns_comparison_rows(tmp_path, fake_extractor):
             'status': 'confirmed',
             'source_text': '3,600만원 (기본급 기준, 성과급 별도)',
             'value': 36000000,
+            'from_image': False,
         }
         assert row['location']['value']['lawd_cd'] == '41135'
         assert s['pending']['payload']['table'][0]['id'] == 'posting-1'

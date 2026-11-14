@@ -17,18 +17,31 @@ async def 함수 안의 await는 "DB나 그래프 작업이 끝날 때까지 기
 다른 사람의 요청도 처리하게 하라"는 뜻이다. 결과를 받을 때까지 다음 줄로 넘어가지 않는다.
 """
 
+import asyncio
 import uuid
+from typing import Annotated
 
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, File, Form, Request, UploadFile, status
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
 
 from backend.api.errors import AppError, ErrorCode, error_responses
 from backend.api.schemas import (
     ConfirmRequest,
+    InputSummary,
     MessageRequest,
     PendingQuestion,
     SessionResponse,
+)
+from backend.inputs.errors import FileInputError, ReadError
+from backend.inputs.limits import MAX_MESSAGE_CHARS
+from backend.inputs.read import (
+    FileReader,
+    ReadResult,
+    UploadedFile,
+    VisionBudgetError,
+    graph_messages,
+    safe_name,
 )
 from backend.normalize import NormalizeError
 
@@ -89,6 +102,8 @@ async def _snapshot(graph: CompiledStateGraph, session_id: str) -> SessionRespon
         pending=pending,
         table=values.get('table', []),
         table_confirmed=values.get('table_confirmed', False),
+        inputs=values.get('inputs', []),
+        input_text='\n'.join(values.get('messages', [])),
         result=values.get('result'),
         report=values.get('report'),
     )
@@ -113,11 +128,73 @@ async def start_session(body: MessageRequest, request: Request) -> SessionRespon
 
 async def _run_with_message(graph: CompiledStateGraph, message: str, session_id: str) -> None:
     """메시지를 넣어 그래프를 실행한다. 공고 정리(Claude 호출)가 실패하면 502로 알린다."""
+    await _run(graph, {'messages': [message]}, session_id)
+
+
+async def _run(graph: CompiledStateGraph, values: dict, session_id: str) -> None:
     try:
-        await graph.ainvoke({'messages': [message]}, _config(session_id))
+        await graph.ainvoke(values, _config(session_id))
     except NormalizeError as e:
         # 502 Bad Gateway: 우리 서버가 아니라 바깥 서비스(Claude) 쪽 문제라는 뜻.
         raise AppError(status.HTTP_502_BAD_GATEWAY, ErrorCode.NORMALIZE_FAILED, str(e)) from e
+
+
+def _file_error(e: FileInputError) -> AppError:
+    return AppError(
+        status.HTTP_422_UNPROCESSABLE_CONTENT,
+        ErrorCode(e.code.value),
+        e.message,
+        details={'file_name': e.file_name} if e.file_name else None,
+    )
+
+
+# 파일은 multipart/form-data로 받는다 (JSON에는 파일을 담을 수 없다).
+# 파일 크기 상한은 main.py의 미들웨어가 요청 본문을 읽기 전에 먼저 막는다.
+@router.post(
+    '/uploads',
+    status_code=status.HTTP_201_CREATED,
+    responses=error_responses(411, 502, 503),
+)
+async def start_session_with_files(
+    request: Request,
+    files: Annotated[list[UploadFile] | None, File(description='공고 파일 (최대 5개)')] = None,
+    message: Annotated[
+        str, Form(max_length=MAX_MESSAGE_CHARS, description='함께 붙여 넣은 공고 글 (선택)')
+    ] = '',
+) -> SessionResponse:
+    """파일(이미지·PDF·엑셀·CSV)과 붙여 넣은 글로 세션을 만든다. 비교표 확인 단계에서 멈춘다.
+
+    파일은 그래프에 넣기 전에 글로 바꾼다 (backend/inputs/read.py). 원본은 저장하지 않는다.
+    """
+    uploads = [
+        UploadedFile(safe_name(f.filename, i), await f.read())
+        for i, f in enumerate(files or [], start=1)
+    ]
+    reader: FileReader = request.app.state.file_reader
+    message = message.strip()
+    try:
+        # 파일 읽기는 시간이 걸리는 일이라 별도 스레드에서 한다 (그동안 /health 등이 멈추지 않게)
+        results: list[ReadResult] = await asyncio.to_thread(reader.read, uploads, message)
+    except FileInputError as e:
+        raise _file_error(e) from e
+    except ReadError as e:
+        raise AppError(status.HTTP_502_BAD_GATEWAY, ErrorCode.READ_FAILED, str(e)) from e
+    except VisionBudgetError as e:
+        raise AppError(
+            status.HTTP_503_SERVICE_UNAVAILABLE, ErrorCode.VISION_DAILY_LIMIT, str(e)
+        ) from e
+
+    del uploads  # 파일 원본(최대 20MB)을 정리(10~60초) 동안 들고 있지 않는다
+    messages, image_texts = graph_messages(message, results)
+    inputs = [InputSummary.model_validate(r, from_attributes=True).model_dump() for r in results]
+    graph = _graph(request)
+    session_id = str(uuid.uuid4())
+    await _run(
+        graph,
+        {'messages': messages, 'image_texts': image_texts, 'inputs': inputs},
+        session_id,
+    )
+    return await _snapshot(graph, session_id)
 
 
 @router.post('/{session_id}/messages', responses=error_responses(404, 502))

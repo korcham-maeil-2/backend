@@ -18,9 +18,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
-from backend.api.errors import register_error_handlers
+from backend.api.errors import register_error_handlers, register_upload_size_limit
 from backend.api.sessions import router as sessions_router
 from backend.graph import build_graph
+from backend.inputs.read import FileReader, daily_budget_from_env
+from backend.inputs.transcribe import ClaudeTranscriber, FixtureTranscriber, Transcriber
 from backend.normalize import Extractor, make_extractor, parse_mode
 
 # 그래프 상태를 저장할 SQLite 파일 위치 (Docker에서는 이 경로를 볼륨에 둔다).
@@ -31,7 +33,11 @@ DEFAULT_DB_PATH = 'var/checkpoints.sqlite'
 DEFAULT_CORS_ORIGINS = 'http://localhost:3000'
 
 
-def create_app(db_path: str | None = None, extractor: Extractor | None = None) -> FastAPI:
+def create_app(
+    db_path: str | None = None,
+    extractor: Extractor | None = None,
+    transcriber: Transcriber | None = None,
+) -> FastAPI:
     """FastAPI 앱을 만들어 돌려준다.
 
     함수로 감싼 이유: 테스트에서 매번 새 임시 DB 파일로 앱을 따로 만들 수 있게 하려고.
@@ -40,6 +46,8 @@ def create_app(db_path: str | None = None, extractor: Extractor | None = None) -
       fixture면 미리 써 둔 응답(비용 0원, 화면 개발용),
       그 밖에는 실제 Claude(ANTHROPIC_API_KEY 필요).
       테스트는 API를 부르지 않도록 항상 가짜를 넣는다.
+    transcriber: 이미지 글자 옮겨 적기. 안 주면 claude 모드는 실제 Claude(하루 한도 있음),
+      fixture·테스트는 미리 받아 둔 시연 파일 글(비용 0원).
     """
     db_path = db_path or os.getenv('CHECKPOINT_DB_PATH', DEFAULT_DB_PATH)
     # 공고 정리 방법: 'claude'(실제) / 'fixture'(미리 써 둔 응답) / 'custom'(테스트가 직접 넣음).
@@ -49,6 +57,12 @@ def create_app(db_path: str | None = None, extractor: Extractor | None = None) -
         extractor = make_extractor(normalize_mode)
     else:
         normalize_mode = 'custom'
+    if transcriber is not None:
+        file_reader = FileReader(transcriber)
+    elif normalize_mode == 'claude':
+        file_reader = FileReader(ClaudeTranscriber(), daily_budget_from_env())
+    else:
+        file_reader = FileReader(FixtureTranscriber())
 
     # [lifespan — 서버가 켜질 때 / 꺼질 때 할 일]
     # yield 앞: 서버가 켜질 때 한 번 실행 (DB 연결 열기, 그래프 만들기)
@@ -61,6 +75,7 @@ def create_app(db_path: str | None = None, extractor: Extractor | None = None) -
         async with AsyncSqliteSaver.from_conn_string(db_path) as saver:
             # app.state: 앱 전체에서 같이 쓰는 보관함. 요청 처리 함수들이 여기서 그래프를 꺼내 쓴다.
             app.state.graph = build_graph(saver, extractor)
+            app.state.file_reader = file_reader
             yield
 
     app = FastAPI(title='월급지도 API', version='0.1.0', lifespan=lifespan)
@@ -68,6 +83,8 @@ def create_app(db_path: str | None = None, extractor: Extractor | None = None) -
     # 실패 응답을 모두 {code, message, details} 한 가지 모양으로 맞춘다 (api/errors.py 참고).
     # 순서 주의: 반드시 CORS 설정보다 먼저 불러야 500 에러 응답에도 CORS 헤더가 붙는다.
     register_error_handlers(app)
+    # 파일 올리기 크기 상한: 요청 본문을 받기 전에 Content-Length로 먼저 막는다 (CORS보다 먼저).
+    register_upload_size_limit(app)
 
     # [CORS — 다른 주소의 웹페이지가 이 서버를 부를 수 있게 허락하기]
     # 브라우저는 보안 때문에 localhost:3000(프론트)에서 localhost:8000(백엔드)으로 가는 요청을

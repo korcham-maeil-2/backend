@@ -2,7 +2,7 @@
   "_note": "정규화(normalize) 노드가 이 공고에서 뽑아야 하는 값. 테스트 정답으로 쓴다. 금액 단위는 원.",
   "id": "down_naju",
   "company": "(가상) 빛가람그리드(주)",
-  "job_title": "전력설비 엔지니어 신입",
+  "job_title": "전력설비 엔지니어",
   "employment_type": "정규직",
   "probation": { "months": 3, "pay_rate": 0.9 },
   "location": {

@@ -25,10 +25,15 @@ CONFIRM_TABLE = 'confirm_table'
 
 
 def route_input(state: GraphState) -> dict[str, Any]:
-    """입력 종류를 판단한다 (텍스트인지, 이미지·PDF·엑셀 파일인지)."""
-    # TODO(#12): 파일 형식에 따라 read_image / read_pdf / read_sheet 로 나눈다.
-    #            지금은 파일 업로드가 없어서 항상 텍스트로 본다.
-    return {'input_kind': 'text'}
+    """입력 확인 자리. 지금은 하는 일이 없다.
+
+    파일(이미지·PDF·엑셀)은 그래프에 들어오기 전에 API가 글로 바꿔 messages에 넣는다
+    (backend/inputs/read.py: 형식에 따라 이미지 인식 / PDF / 엑셀·CSV 읽기).
+    그래프 안에서 읽지 않는 이유:
+      - 파일 원본이 그래프 상태(SQLite 체크포인트)에 저장되지 않게
+      - 읽다가 실패하면 세션을 만들지 않아, 다시 올렸을 때 같은 글이 두 번 쌓이지 않게
+    """
+    return {}
 
 
 def make_normalize(extract: Extractor) -> Callable[[GraphState], dict[str, Any]]:
@@ -44,8 +49,12 @@ def make_normalize(extract: Extractor) -> Callable[[GraphState], dict[str, Any]]
         1) LLM이 칸마다 값과 원문 인용을 뽑는다 (extract)
         2) 코드가 인용·숫자를 원문과 대조해 확인/추정/공고에 없음을 정한다 (build_rows)
         """
-        text = '\n'.join(state.get('messages', []))
-        rows = build_rows(extract(text), text)
+        messages = state.get('messages', [])
+        text = '\n'.join(messages)
+        image_texts = set(state.get('image_texts', []))
+        # 이미지에서 옮겨 적은 글을 뺀 나머지. 인용이 여기에 없으면 '이미지에서 읽음' 표시.
+        plain = '\n'.join(m for m in messages if m not in image_texts) if image_texts else None
+        rows = build_rows(extract(text), text, plain)
         # 체크포인터(SQLite)에 저장되도록 평범한 dict로 바꿔 담는다.
         return {'table': [r.model_dump(mode='json') for r in rows], 'table_confirmed': False}
 

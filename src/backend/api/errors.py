@@ -33,6 +33,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from backend.inputs.limits import MAX_REQUEST_BYTES, TOTAL_TOO_LARGE_MESSAGE
+
 logger = logging.getLogger(__name__)
 
 
@@ -43,6 +45,20 @@ class ErrorCode(StrEnum):
     SESSION_NOT_FOUND = 'SESSION_NOT_FOUND'  # 404: 없는 세션 ID
     SESSION_NOT_AWAITING_CONFIRMATION = 'SESSION_NOT_AWAITING_CONFIRMATION'  # 409
     NORMALIZE_FAILED = 'NORMALIZE_FAILED'  # 502: 공고 정리(Claude 호출) 실패
+    # 파일 올리기 (backend/inputs). 422는 사용자가 파일을 바꾸면 해결된다.
+    FILE_MISSING = 'FILE_MISSING'  # 422: 파일 없음
+    FILE_TOO_MANY = 'FILE_TOO_MANY'  # 422: 파일 수 초과
+    FILE_TOO_LARGE = 'FILE_TOO_LARGE'  # 422: 파일·요청 크기 초과
+    FILE_EMPTY = 'FILE_EMPTY'  # 422: 빈 파일
+    FILE_DUPLICATE = 'FILE_DUPLICATE'  # 422: 같은 파일을 두 번 넣음
+    FILE_TYPE_UNSUPPORTED = 'FILE_TYPE_UNSUPPORTED'  # 422: 받지 않는 형식
+    FILE_UNREADABLE = 'FILE_UNREADABLE'  # 422: 손상·암호·인코딩
+    FILE_TOO_LONG = 'FILE_TOO_LONG'  # 422: 쪽 수·글자 수·이미지 장 수 초과
+    FILE_NO_TEXT = 'FILE_NO_TEXT'  # 422: 글자가 없음
+    DEMO_FILE_ONLY = 'DEMO_FILE_ONLY'  # 422: 시연 모드에서 준비 안 된 이미지
+    LENGTH_REQUIRED = 'LENGTH_REQUIRED'  # 411: 요청 크기(Content-Length)를 안 알려 줌
+    READ_FAILED = 'READ_FAILED'  # 502: 이미지 읽기(Claude 호출) 실패
+    VISION_DAILY_LIMIT = 'VISION_DAILY_LIMIT'  # 503: 오늘 이미지 읽기 한도 소진
     # 공통 에러 (FastAPI가 자동으로 내는 것을 바꿔 담는다)
     VALIDATION_ERROR = 'VALIDATION_ERROR'  # 422: 요청 JSON 모양이 틀림
     NOT_FOUND = 'NOT_FOUND'  # 404: 없는 주소
@@ -154,3 +170,31 @@ def register_error_handlers(app: FastAPI) -> None:
                     message='서버에서 문제가 생겼습니다. 잠시 후 다시 시도해 주세요.',
                 ),
             )
+
+
+def register_upload_size_limit(app: FastAPI) -> None:
+    """요청 본문이 너무 크면 받기 전에 422로 막는다 (모든 주소에 적용).
+
+    FastAPI는 엔드포인트 함수를 부르기 전에 본문을 전부 받아 둔다(파일은 디스크에).
+    그래서 크기 검사를 함수 안에서 하면 이미 늦다 → 미들웨어에서 Content-Length를 먼저 본다.
+    브라우저의 파일 올리기(FormData)는 항상 Content-Length를 보낸다. 없으면 411로 거절한다.
+    """
+
+    @app.middleware('http')
+    async def limit_request_size(request: Request, call_next):
+        raw = request.headers.get('content-length')
+        is_upload = request.headers.get('content-type', '').startswith('multipart/')
+        if is_upload and (raw is None or not raw.isdigit()):
+            return _json(
+                status.HTTP_411_LENGTH_REQUIRED,
+                ErrorResponse(
+                    code=ErrorCode.LENGTH_REQUIRED,
+                    message='요청 크기를 알 수 없어요. 파일을 다시 올려 주세요.',
+                ),
+            )
+        if raw and raw.isdigit() and int(raw) > MAX_REQUEST_BYTES:
+            return _json(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                ErrorResponse(code=ErrorCode.FILE_TOO_LARGE, message=TOTAL_TOO_LARGE_MESSAGE),
+            )
+        return await call_next(request)
