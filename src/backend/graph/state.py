@@ -9,7 +9,8 @@ LangGraph는 "노드(함수)들을 화살표로 이은 그래프"를 실행하�
 이 파일은 그 '상태'에 어떤 칸이 있는지 정의한다.
 노드가 {'table': [...]} 를 돌려주면 LangGraph가 상태의 table 칸을 그 값으로 바꿔 준다.
 
-비교표 한 행(공고 1건)의 정확한 칸은 normalize 이슈(#5)에서 정한다. 지금은 뼈대라 dict로 둔다.
+비교표 한 행(공고 1건)의 칸은 backend/normalize/schema.py의 ComparisonRow다.
+상태에는 체크포인터(SQLite)에 그대로 저장되도록 ComparisonRow를 dict로 바꿔(model_dump) 담는다.
 """
 
 import operator

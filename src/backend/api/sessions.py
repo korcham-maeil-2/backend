@@ -30,6 +30,7 @@ from backend.api.schemas import (
     PendingQuestion,
     SessionResponse,
 )
+from backend.normalize import NormalizeError
 
 # APIRouter: 관련된 주소들을 묶는 단위. prefix='/sessions'라서 아래 '/{session_id}'는
 # 실제로 '/sessions/{session_id}'가 된다. tags는 /docs 화면에서 묶어 보여 줄 이름.
@@ -99,18 +100,27 @@ async def _snapshot(graph: CompiledStateGraph, session_id: str) -> SessionRespon
 # 반환 타입(-> SessionResponse)이 응답 JSON 모양이 된다. status_code=201은 '새로 만들었음'.
 # 아래 다른 함수의 responses=error_responses(404) 같은 표시는
 # 그 주소에서만 날 수 있는 실패 상태 코드를 /docs·프론트 타입에 알리는 것이다.
-@router.post('', status_code=status.HTTP_201_CREATED)
+@router.post('', status_code=status.HTTP_201_CREATED, responses=error_responses(502))
 async def start_session(body: MessageRequest, request: Request) -> SessionResponse:
     """세션을 만들고 첫 메시지로 그래프를 실행한다. 비교표 확인 단계에서 멈춘다."""
     graph = _graph(request)
     session_id = str(uuid.uuid4())  # 겹치지 않는 무작위 ID
     # ainvoke(입력, 설정): 그래프를 실행한다. 입력은 상태의 초기값.
     # confirm_table의 interrupt()에서 멈추면 그 시점에 ainvoke가 끝나고 돌아온다.
-    await graph.ainvoke({'messages': [body.message]}, _config(session_id))
+    await _run_with_message(graph, body.message, session_id)
     return await _snapshot(graph, session_id)
 
 
-@router.post('/{session_id}/messages', responses=error_responses(404))
+async def _run_with_message(graph: CompiledStateGraph, message: str, session_id: str) -> None:
+    """메시지를 넣어 그래프를 실행한다. 공고 정리(Claude 호출)가 실패하면 502로 알린다."""
+    try:
+        await graph.ainvoke({'messages': [message]}, _config(session_id))
+    except NormalizeError as e:
+        # 502 Bad Gateway: 우리 서버가 아니라 바깥 서비스(Claude) 쪽 문제라는 뜻.
+        raise AppError(status.HTTP_502_BAD_GATEWAY, ErrorCode.NORMALIZE_FAILED, str(e)) from e
+
+
+@router.post('/{session_id}/messages', responses=error_responses(404, 502))
 async def send_message(session_id: str, body: MessageRequest, request: Request) -> SessionResponse:
     """같은 세션에 메시지를 더한다. 이전 메시지와 합쳐 비교표부터 다시 만든다.
 
@@ -120,7 +130,7 @@ async def send_message(session_id: str, body: MessageRequest, request: Request) 
     await _snapshot(graph, session_id)  # 없는 세션이면 여기서 404
     # 새 입력으로 다시 실행한다. messages 칸은 '뒤에 붙이기'라서(state.py 참고)
     # 이전 메시지 + 새 메시지가 합쳐진 채로 처음 노드부터 다시 돈다.
-    await graph.ainvoke({'messages': [body.message]}, _config(session_id))
+    await _run_with_message(graph, body.message, session_id)
     return await _snapshot(graph, session_id)
 
 

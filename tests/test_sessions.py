@@ -16,14 +16,21 @@
 c.post(주소, json=본문), c.get(주소) → 응답 r. r.status_code(숫자), r.json()(본문 dict).
 """
 
+from conftest import FakeExtractor, scenario_text
 from fastapi.testclient import TestClient
 
 from backend.main import create_app
 
+PANGYO = scenario_text('near_pangyo')
+NAJU = scenario_text('down_naju')
 
-def client(db_path) -> TestClient:
-    """주어진 SQLite 파일을 쓰는 새 앱으로 테스트 클라이언트를 만든다."""
-    return TestClient(create_app(str(db_path)))
+
+def client(db_path, extractor=None) -> TestClient:
+    """주어진 SQLite 파일을 쓰는 새 앱으로 테스트 클라이언트를 만든다.
+
+    공고 정리(LLM)는 손으로 쓴 응답을 돌려주는 가짜를 쓴다 (실제 Claude API 호출 금지).
+    """
+    return TestClient(create_app(str(db_path), extractor=extractor or FakeExtractor()))
 
 
 def test_start_stops_at_confirm_table_then_confirm_completes(tmp_path):
@@ -31,12 +38,13 @@ def test_start_stops_at_confirm_table_then_confirm_completes(tmp_path):
     db = tmp_path / 'cp.sqlite'
     with client(db) as c:
         # 1) 세션 시작 → 멈춰 있어야 한다
-        r = c.post('/sessions', json={'message': '판교 백엔드 신입 연봉 3,600만원'})
+        r = c.post('/sessions', json={'message': PANGYO})
         assert r.status_code == 201
         s = r.json()
         assert s['status'] == 'awaiting_confirmation'
         assert s['pending']['type'] == 'confirm_table'
-        assert s['table'] == [{'raw_text': '판교 백엔드 신입 연봉 3,600만원'}]
+        assert len(s['table']) == 1
+        assert s['table'][0]['company']['value'] == '(가상) 이음데이터랩(주)'
         assert s['result'] is None  # 아직 계산 전
 
         # 2) 비교표 확인 → 이어서 끝까지 실행
@@ -58,13 +66,19 @@ def test_state_survives_restart_in_sqlite(tmp_path):
     db = tmp_path / 'cp.sqlite'
     # 첫 번째 서버: 세션을 시작만 하고 끈다 (with 블록이 끝나면 앱이 종료된다)
     with client(db) as c:
-        sid = c.post('/sessions', json={'message': '나주 공고'}).json()['session_id']
+        sid = c.post('/sessions', json={'message': NAJU}).json()['session_id']
 
     # 두 번째 서버: 같은 파일로 새로 켜서, 아까 세션을 이어서 확인한다
     with client(db) as c:
         assert c.get(f'/sessions/{sid}').json()['status'] == 'awaiting_confirmation'
         # 사용자가 비교표를 고쳐서 보낸 경우: 고친 표가 그대로 반영돼야 한다
-        edited = [{'raw_text': '나주 공고', 'company': '(가상) 빛가람그리드(주)'}]
+        # 연봉 칸을 사용자가 직접 입력했다고 치고 status를 user_input으로 바꿔 보낸다.
+        edited = c.get(f'/sessions/{sid}').json()['table']
+        edited[0]['annual_salary_krw'] = {
+            'value': 33000000,
+            'status': 'user_input',
+            'source_text': None,
+        }
         done = c.post(f'/sessions/{sid}/confirm', json={'approved': True, 'table': edited}).json()
         assert done['status'] == 'completed'
         assert done['table'] == edited
@@ -82,11 +96,15 @@ def test_sessions_are_isolated(tmp_path):
 
 def test_message_appends_and_rebuilds_table(tmp_path):
     """메시지를 더 보내면 이전 메시지와 합쳐져 비교표를 다시 만든다."""
-    with client(tmp_path / 'cp.sqlite') as c:
+    fake = FakeExtractor()
+    with client(tmp_path / 'cp.sqlite', fake) as c:
         sid = c.post('/sessions', json={'message': '첫 공고'}).json()['session_id']
         s = c.post(f'/sessions/{sid}/messages', json={'message': '교통비 월 10만원'}).json()
         assert s['status'] == 'awaiting_confirmation'
-        assert s['table'] == [{'raw_text': '첫 공고\n교통비 월 10만원'}]
+        # 두 번째 실행에서 LLM은 두 메시지를 합친 글을 받는다
+        assert fake.calls == ['첫 공고', '첫 공고\n교통비 월 10만원']
+        # 공고가 아닌 글이면 비교표는 비어 있다 (지어내지 않는다)
+        assert s['table'] == []
 
 
 def test_errors_use_common_shape(tmp_path):

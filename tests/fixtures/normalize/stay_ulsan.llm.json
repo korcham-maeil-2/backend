@@ -1,0 +1,87 @@
+{
+  "_note": "Claude 응답 대신 쓰는 손으로 쓴 fixture (실제 API 호출 아님). 입력: stay_ulsan.input.txt",
+  "postings": [
+    {
+      "company": {
+        "value": "(주)여울케미칼",
+        "quote": "(주)여울케미칼"
+      },
+      "job_title": {
+        "value": "공정관리 신입",
+        "quote": "공정관리 신입 1명"
+      },
+      "employment_type": {
+        "value": "정규직",
+        "quote": "정규직 (수습 3개월)"
+      },
+      "hiring_track": {
+        "value": "신입",
+        "quote": "공정관리 신입 1명"
+      },
+      "location": {
+        "value": {
+          "sido": "울산광역시",
+          "sigungu": "남구"
+        },
+        "quote": "울산광역시 남구 부곡동 000 (석유화학단지 내)"
+      },
+      "salary_type": {
+        "value": "undisclosed",
+        "quote": "회사 내규에 따름 (동종업계 상위 수준) / 최종 합격 후 처우 협의"
+      },
+      "annual_salary_krw": {
+        "value": null,
+        "quote": null
+      },
+      "monthly_salary_krw": {
+        "value": null,
+        "quote": null
+      },
+      "meal_allowance_monthly_krw": {
+        "value": null,
+        "quote": null
+      },
+      "meal_allowance_in_salary": {
+        "value": null,
+        "quote": null
+      },
+      "meals_provided": {
+        "value": true,
+        "quote": "중식 제공(근무일 중식, 회사 부담)"
+      },
+      "housing_allowance_monthly_krw": {
+        "value": null,
+        "quote": null
+      },
+      "housing_allowance_months": {
+        "value": null,
+        "quote": null
+      },
+      "company_housing": {
+        "value": null,
+        "quote": null
+      },
+      "shuttle_bus": {
+        "value": true,
+        "quote": "통근버스: 이용 가능 (이용료 회사 부담)"
+      },
+      "transport_allowance_monthly_krw": {
+        "value": null,
+        "quote": null
+      },
+      "other_allowances": [],
+      "probation_months": {
+        "value": 3,
+        "quote": "수습 3개월"
+      },
+      "probation_pay_rate": {
+        "value": null,
+        "quote": null
+      },
+      "overtime": {
+        "value": null,
+        "quote": null
+      }
+    }
+  ]
+}

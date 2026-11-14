@@ -12,11 +12,13 @@
 지금은 흐름만 이어 둔 '빈 노드'다. 실제 처리는 각 TODO에 적은 이슈에서 채운다.
 """
 
+from collections.abc import Callable
 from typing import Any
 
 from langgraph.types import interrupt
 
 from backend.graph.state import GraphState
+from backend.normalize import Extractor, build_rows
 
 # 그래프가 멈춘 이유를 API에 알려 줄 때 쓰는 이름표.
 CONFIRM_TABLE = 'confirm_table'
@@ -29,12 +31,25 @@ def route_input(state: GraphState) -> dict[str, Any]:
     return {'input_kind': 'text'}
 
 
-def normalize(state: GraphState) -> dict[str, Any]:
-    """제각각인 공고 내용을 같은 칸의 비교표로 정리한다."""
-    # TODO(#5): 여기서 Claude(LLM)를 불러 회사·지역·연봉 같은 칸으로 정리한다.
-    #           지금은 사용자가 보낸 문장을 그대로 담은 행 하나만 만든다.
-    raw = '\n'.join(state.get('messages', []))
-    return {'table': [{'raw_text': raw}], 'table_confirmed': False}
+def make_normalize(extract: Extractor) -> Callable[[GraphState], dict[str, Any]]:
+    """normalize 노드를 만든다. extract(공고 글 → LLM 답)를 밖에서 넣어 받는다.
+
+    밖에서 넣는 이유: 실제 서비스는 Claude를 부르는 ClaudeExtractor를,
+    테스트는 손으로 쓴 정답 응답을 돌려주는 가짜를 넣기 위해서다 (테스트 중 API 호출 금지).
+    """
+
+    def normalize(state: GraphState) -> dict[str, Any]:
+        """제각각인 공고 내용을 같은 칸의 비교표로 정리한다.
+
+        1) LLM이 칸마다 값과 원문 인용을 뽑는다 (extract)
+        2) 코드가 인용·숫자를 원문과 대조해 확인/추정/공고에 없음을 정한다 (build_rows)
+        """
+        text = '\n'.join(state.get('messages', []))
+        rows = build_rows(extract(text), text)
+        # 체크포인터(SQLite)에 저장되도록 평범한 dict로 바꿔 담는다.
+        return {'table': [r.model_dump(mode='json') for r in rows], 'table_confirmed': False}
+
+    return normalize
 
 
 def confirm_table(state: GraphState) -> dict[str, Any]:

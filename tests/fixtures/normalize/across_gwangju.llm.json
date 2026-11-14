@@ -1,0 +1,87 @@
+{
+  "_note": "Claude 응답 대신 쓰는 손으로 쓴 fixture (실제 API 호출 아님). 입력: across_gwangju.input.txt",
+  "postings": [
+    {
+      "company": {
+        "value": "늘찬오토텍",
+        "quote": "늘찬오토텍(1차 협력사)"
+      },
+      "job_title": {
+        "value": "품질관리 경력직",
+        "quote": "품질관리 경력직"
+      },
+      "employment_type": {
+        "value": null,
+        "quote": null
+      },
+      "hiring_track": {
+        "value": "경력",
+        "quote": "품질관리 경력직"
+      },
+      "location": {
+        "value": {
+          "sido": "광주",
+          "sigungu": "광산구"
+        },
+        "quote": "광주 광산구 하남산단"
+      },
+      "salary_type": {
+        "value": "to_propose",
+        "quote": "희망 세전 고정연봉을 회신해 주세요"
+      },
+      "annual_salary_krw": {
+        "value": null,
+        "quote": null
+      },
+      "monthly_salary_krw": {
+        "value": null,
+        "quote": null
+      },
+      "meal_allowance_monthly_krw": {
+        "value": null,
+        "quote": null
+      },
+      "meal_allowance_in_salary": {
+        "value": null,
+        "quote": null
+      },
+      "meals_provided": {
+        "value": true,
+        "quote": "중식은 주고"
+      },
+      "housing_allowance_monthly_krw": {
+        "value": null,
+        "quote": null
+      },
+      "housing_allowance_months": {
+        "value": null,
+        "quote": null
+      },
+      "company_housing": {
+        "value": false,
+        "quote": "기숙사랑 통근버스는 없대"
+      },
+      "shuttle_bus": {
+        "value": false,
+        "quote": "기숙사랑 통근버스는 없대"
+      },
+      "transport_allowance_monthly_krw": {
+        "value": null,
+        "quote": null
+      },
+      "other_allowances": [],
+      "probation_months": {
+        "value": null,
+        "quote": null
+      },
+      "probation_pay_rate": {
+        "value": null,
+        "quote": null
+      },
+      "overtime": {
+        "value": "연장근로수당 별도 (시간 미정)",
+        "quote": "퇴직금과 연장근로수당은 별도입니다."
+      }
+    }
+  ]
+}
