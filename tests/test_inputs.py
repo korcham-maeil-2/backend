@@ -26,6 +26,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 from test_normalize import KNOWN_DIFFERENCES, actual, expected_pairs
 
+from backend.claude import MODEL
 from backend.inputs import detect, sheet
 from backend.inputs.errors import FileInputError, InputErrorCode, ReadError
 from backend.inputs.image import encode_for_vision, prepare_image, split_tall
@@ -59,7 +60,6 @@ from backend.inputs.transcribe import (
 )
 from backend.main import create_app
 from backend.normalize import FixtureExtractor, build_rows, checks
-from backend.normalize.llm import MODEL
 
 # ── 준비물 ───────────────────────────────────────────────────────
 
@@ -748,6 +748,20 @@ def test_claude_transcriber_connection_error():
     err = anthropic.APIConnectionError(request=httpx.Request('POST', 'https://example.invalid'))
     with pytest.raises(ReadError):
         ClaudeTranscriber(_client(FakeCreate(error=err)))(ImageSource('a', 's', ONE_IMAGE * 2))
+
+
+def test_claude_transcriber_missing_api_key_is_read_error(sdk_client_without_key, caplog):
+    """리뷰(backend#28)에서 찾은 경우: 키 없이 켠 서버. SDK의 TypeError도 ReadError(→502)."""
+    with pytest.raises(ReadError) as info:
+        ClaudeTranscriber(sdk_client_without_key)(ImageSource('a', 's', ONE_IMAGE))
+    assert isinstance(info.value.__cause__, TypeError)
+    assert 'ANTHROPIC_API_KEY' in caplog.text
+
+
+def test_claude_transcriber_other_type_error_is_not_hidden():
+    err = TypeError('unexpected keyword')
+    with pytest.raises(TypeError, match='unexpected keyword'):
+        ClaudeTranscriber(_client(FakeCreate(error=err)))(ImageSource('a', 's', ONE_IMAGE))
 
 
 # ── 9) Fable 코드 검토에서 나온 경우 ─────────────────────────────────

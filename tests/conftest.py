@@ -35,6 +35,24 @@ def no_real_anthropic_calls(monkeypatch):
     monkeypatch.setattr(anthropic, 'Anthropic', forbidden)
 
 
+@pytest.fixture
+def sdk_client_without_key(monkeypatch):
+    """키 없이 만든 '진짜' SDK 클라이언트 (서버에 키를 안 넣고 켠 상황).
+
+    SDK는 요청을 보내기 전에 키가 없다며 TypeError를 낸다. 혹시 요청이 나가더라도
+    닫힌 주소(127.0.0.1:9)라 Claude에 닿지 않고 과금되지 않는다.
+    """
+    from anthropic._client import Anthropic  # 위에서 막은 건 anthropic.Anthropic 이름뿐
+
+    monkeypatch.delenv('ANTHROPIC_AUTH_TOKEN', raising=False)
+    monkeypatch.delenv('ANTHROPIC_CUSTOM_HEADERS', raising=False)
+    client = Anthropic(base_url='http://127.0.0.1:9', max_retries=0)
+    # 이 컴퓨터에 인증 설정 파일(프로필 등)이 있으면 SDK가 찾아 써서 '키 없음'이 재현되지 않는다
+    if client.api_key or client.auth_token or client.credentials is not None:
+        pytest.skip('이 컴퓨터에 Anthropic 인증 설정이 있어 키 없는 상태를 만들 수 없음')
+    return client
+
+
 def scenario_text(pid: str) -> str:
     return (FIXTURES / f'{pid}.input.txt').read_text(encoding='utf-8')
 

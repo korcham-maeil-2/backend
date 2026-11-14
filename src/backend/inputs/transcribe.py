@@ -18,7 +18,6 @@ NORMALIZE_MODE=fixture면 FixtureTranscriber가 미리 받아 둔 글(tests/fixt
 import base64
 import hashlib
 import json
-import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -27,11 +26,18 @@ from typing import Protocol
 
 import anthropic
 
+from backend.claude import FailureMessages, answer_text, create_message
 from backend.inputs.errors import FileInputError, InputErrorCode, ReadError
 from backend.inputs.image import VisionImage
-from backend.normalize.llm import FALLBACK_BETA, MODEL
 
-logger = logging.getLogger(__name__)
+FAILURE_MESSAGES = FailureMessages(
+    task='이미지 읽기',
+    busy='요청이 많아 이미지를 읽지 못했습니다. 잠시 후 다시 시도해 주세요.',
+    failed='이미지를 읽는 중 문제가 생겼습니다.',
+    unreachable='이미지 읽기 서버에 연결하지 못했습니다.',
+    refusal='이 이미지는 읽을 수 없습니다. 공고 내용이 보이는 이미지를 넣어 주세요.',
+    too_long='이미지의 글이 너무 많아 다 읽지 못했습니다. 공고 부분만 잘라 넣어 주세요.',
+)
 
 # 서버 전체에서 Claude 이미지 호출을 동시에 이만큼만 보낸다. 파일 여러 개 × 쪽 여러 개를 한꺼번에
 # 보내면 요청 한도(429)에 걸려 전체가 실패할 수 있다.
@@ -118,42 +124,18 @@ class ClaudeTranscriber:
             },
             {'type': 'text', 'text': '이 이미지의 글자를 규칙대로 옮겨 적어 주세요.'},
         ]
-        try:
-            with _MAX_CONCURRENT_CALLS:
-                response = self.client.beta.messages.create(
-                    model=MODEL,
-                    max_tokens=8000,
-                    betas=[FALLBACK_BETA],
-                    fallbacks='default',
-                    # 옮겨 적기는 추론이 거의 필요 없다 → 가장 낮은 단계로 비용·시간을 줄인다.
-                    output_config={'effort': 'low'},
-                    system=TRANSCRIBE_PROMPT,
-                    messages=[{'role': 'user', 'content': content}],
-                )
-        except anthropic.RateLimitError as e:
-            logger.warning('Claude 요청 한도 초과 (status=%s)', e.status_code)
-            raise ReadError(
-                '요청이 많아 이미지를 읽지 못했습니다. 잠시 후 다시 시도해 주세요.'
-            ) from e
-        except anthropic.APIStatusError as e:
-            logger.error('Claude API 오류 (status=%s)', e.status_code)
-            raise ReadError('이미지를 읽는 중 문제가 생겼습니다.') from e
-        except anthropic.APIConnectionError as e:
-            logger.error('Claude API 연결 실패')
-            raise ReadError('이미지 읽기 서버에 연결하지 못했습니다.') from e
-        except anthropic.AnthropicError as e:
-            logger.error('Claude 클라이언트 오류: %s', type(e).__name__)
-            raise ReadError('이미지를 읽는 중 문제가 생겼습니다.') from e
-
-        if response.stop_reason == 'refusal':
-            raise ReadError(
-                '이 이미지는 읽을 수 없습니다. 공고 내용이 보이는 이미지를 넣어 주세요.'
+        with _MAX_CONCURRENT_CALLS:
+            response = create_message(
+                lambda: self.client,
+                ReadError,
+                FAILURE_MESSAGES,
+                max_tokens=8000,
+                # 옮겨 적기는 추론이 거의 필요 없다 → 가장 낮은 단계로 비용·시간을 줄인다.
+                output_config={'effort': 'low'},
+                system=TRANSCRIBE_PROMPT,
+                messages=[{'role': 'user', 'content': content}],
             )
-        if response.stop_reason == 'max_tokens':
-            raise ReadError(
-                '이미지의 글이 너무 많아 다 읽지 못했습니다. 공고 부분만 잘라 넣어 주세요.'
-            )
-        return ''.join(b.text for b in response.content if b.type == 'text').strip()
+        return answer_text(response).strip()
 
 
 # backend/tests/fixtures/transcribe  (이 파일: backend/src/backend/inputs/transcribe.py)

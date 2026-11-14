@@ -14,9 +14,7 @@
   3) 모양이 틀리면 무엇이 틀렸는지 알려 주고 한 번만 다시 묻는다. 그래도 틀리면 NormalizeError(502)
 'LLM은 값과 인용만, 확인/추정은 코드가 원문과 대조해 정한다'는 원칙은 그대로다.
 
-[fallbacks='default']
-드물게 안전 분류기가 요청을 거절(stop_reason='refusal')하면, 서버가 다른 모델로 같은 요청을
-다시 돌려 준다. 공고 정리에서 거절될 일은 거의 없지만 시연 중 멈추지 않게 켜 둔다.
+모델·fallback 설정과 실패 처리(429·연결 실패·키 없음·거절·잘림)는 backend/claude.py에 있다.
 """
 
 import json
@@ -26,12 +24,20 @@ from typing import Protocol
 import anthropic
 from pydantic import ValidationError
 
+from backend.claude import FailureMessages, answer_text, create_message
 from backend.normalize.schema import ExtractionResult
 
 logger = logging.getLogger(__name__)
 
-MODEL = 'claude-sonnet-5-5'
-FALLBACK_BETA = 'server-side-fallback-2026-07-01'
+FAILED = '공고를 정리하는 중 문제가 생겼습니다.'
+FAILURE_MESSAGES = FailureMessages(
+    task='공고 정리',
+    busy='요청이 많아 공고를 정리하지 못했습니다. 잠시 후 다시 시도해 주세요.',
+    failed=FAILED,
+    unreachable='공고 정리 서버에 연결하지 못했습니다.',
+    refusal='이 내용은 정리할 수 없습니다. 공고 내용만 붙여 넣어 주세요.',
+    too_long='글이 너무 길어 정리하지 못했습니다. 공고를 나눠서 보내 주세요.',
+)
 
 SYSTEM_PROMPT = """\
 너는 채용 공고·합격 안내·채팅에서 근무 조건을 '옮겨 적는' 일을 한다.
@@ -112,7 +118,7 @@ class ClaudeExtractor:
         messages: list[dict] = [{'role': 'user', 'content': text}]
         response = self._create(messages)
         try:
-            return parse_answer(_answer_text(response))
+            return parse_answer(answer_text(response))
         except AnswerFormatError as e:
             # 모양이 틀렸으면 무엇이 틀렸는지 알려 주고 한 번만 다시 묻는다.
             # 앞 답(response.content)은 생각 블록까지 그대로 돌려준다 (모델이 이어서 읽는다).
@@ -128,47 +134,23 @@ class ClaudeExtractor:
                 },
             ]
         try:
-            return parse_answer(_answer_text(self._create(messages)))
+            return parse_answer(answer_text(self._create(messages)))
         except AnswerFormatError as e:
             logger.error('Claude 답 모양 오류 (다시 물어도 같음): %s', e.summary)
-            raise NormalizeError('공고를 정리하는 중 문제가 생겼습니다.') from e
+            raise NormalizeError(FAILED) from e
 
     def _create(self, messages: list[dict]):
-        try:
-            response = self.client.beta.messages.create(
-                model=MODEL,
-                max_tokens=16000,
-                betas=[FALLBACK_BETA],
-                fallbacks='default',
-                # 옮겨 적기라 깊은 추론은 필요 없다. 기본값(high)보다 낮춰 비용·시간을 줄인다.
-                output_config={'effort': 'medium'},
-                # 시스템 프롬프트(규칙 + 형식)는 매번 같아서 캐시해 두면 두 번째부터 싸진다.
-                system=[
-                    {'type': 'text', 'text': SYSTEM_TEXT, 'cache_control': {'type': 'ephemeral'}}
-                ],
-                messages=messages,
-            )
-        except anthropic.RateLimitError as e:
-            logger.warning('Claude 요청 한도 초과 (status=%s)', e.status_code)
-            raise NormalizeError(
-                '요청이 많아 공고를 정리하지 못했습니다. 잠시 후 다시 시도해 주세요.'
-            ) from e
-        except anthropic.APIStatusError as e:
-            logger.error('Claude API 오류 (status=%s)', e.status_code)
-            raise NormalizeError('공고를 정리하는 중 문제가 생겼습니다.') from e
-        except anthropic.APIConnectionError as e:
-            logger.error('Claude API 연결 실패')
-            raise NormalizeError('공고 정리 서버에 연결하지 못했습니다.') from e
-        except anthropic.AnthropicError as e:
-            # 키가 없을 때 등. 원인 문장에 키 값이 들어가지 않는다.
-            logger.error('Claude 클라이언트 오류: %s', type(e).__name__)
-            raise NormalizeError('공고를 정리하는 중 문제가 생겼습니다.') from e
-
-        if response.stop_reason == 'refusal':
-            raise NormalizeError('이 내용은 정리할 수 없습니다. 공고 내용만 붙여 넣어 주세요.')
-        if response.stop_reason == 'max_tokens':
-            raise NormalizeError('글이 너무 길어 정리하지 못했습니다. 공고를 나눠서 보내 주세요.')
-        return response
+        return create_message(
+            lambda: self.client,
+            NormalizeError,
+            FAILURE_MESSAGES,
+            max_tokens=16000,
+            # 옮겨 적기라 깊은 추론은 필요 없다. 기본값(high)보다 낮춰 비용·시간을 줄인다.
+            output_config={'effort': 'medium'},
+            # 시스템 프롬프트(규칙 + 형식)는 매번 같아서 캐시해 두면 두 번째부터 싸진다.
+            system=[{'type': 'text', 'text': SYSTEM_TEXT, 'cache_control': {'type': 'ephemeral'}}],
+            messages=messages,
+        )
 
 
 class AnswerFormatError(Exception):
@@ -177,10 +159,6 @@ class AnswerFormatError(Exception):
     def __init__(self, summary: str) -> None:
         super().__init__(summary)
         self.summary = summary
-
-
-def _answer_text(response) -> str:
-    return ''.join(b.text for b in response.content if getattr(b, 'type', None) == 'text')
 
 
 def parse_answer(raw: str) -> ExtractionResult:

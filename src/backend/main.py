@@ -10,6 +10,7 @@ FastAPI는 "주소(URL)로 요청이 오면 파이썬 함수를 실행하고 결
     uv run fastapi dev src/backend/main.py
 """
 
+import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -31,6 +32,15 @@ DEFAULT_DB_PATH = 'var/checkpoints.sqlite'
 
 # 프론트엔드(Next.js) 개발 서버 주소.
 DEFAULT_CORS_ORIGINS = 'http://localhost:3000'
+
+logger = logging.getLogger(__name__)
+
+
+def _has_api_key_env() -> bool:
+    """SDK가 환경 변수에서 읽는 인증 값(키 또는 토큰)이 있는지. 값 자체는 보지도 남기지도 않는다."""
+    return any(
+        os.getenv(name, '').strip() for name in ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN')
+    )
 
 
 def create_app(
@@ -55,6 +65,13 @@ def create_app(
     if extractor is None:
         normalize_mode = parse_mode(os.getenv('NORMALIZE_MODE'))
         extractor = make_extractor(normalize_mode)
+        if normalize_mode == 'claude' and not _has_api_key_env():
+            # 서버는 켠다 (테스트·CI가 키 없이 이 파일을 불러온다). 대신 시작 로그로 바로 알린다.
+            # 이대로면 공고 정리·이미지 읽기 요청이 502로 실패한다.
+            logger.warning(
+                'NORMALIZE_MODE=claude인데 ANTHROPIC_API_KEY·ANTHROPIC_AUTH_TOKEN이 없습니다. '
+                '키를 넣거나, 시연이면 NORMALIZE_MODE=fixture로 켜세요.'
+            )
     else:
         normalize_mode = 'custom'
     if transcriber is not None:
