@@ -21,7 +21,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from backend.api.errors import register_error_handlers
 from backend.api.sessions import router as sessions_router
 from backend.graph import build_graph
-from backend.normalize import Extractor
+from backend.normalize import Extractor, make_extractor, parse_mode
 
 # 그래프 상태를 저장할 SQLite 파일 위치 (Docker에서는 이 경로를 볼륨에 둔다).
 # SQLite는 별도 DB 서버 없이 파일 하나로 동작하는 데이터베이스다.
@@ -36,10 +36,19 @@ def create_app(db_path: str | None = None, extractor: Extractor | None = None) -
 
     함수로 감싼 이유: 테스트에서 매번 새 임시 DB 파일로 앱을 따로 만들 수 있게 하려고.
     db_path를 안 주면 환경 변수 CHECKPOINT_DB_PATH, 그것도 없으면 기본 경로를 쓴다.
-    extractor: 공고 정리에 쓸 LLM 호출. 안 주면 실제 Claude(ANTHROPIC_API_KEY 필요).
+    extractor: 공고 정리에 쓸 LLM 호출. 안 주면 환경 변수 NORMALIZE_MODE로 고른다.
+      fixture면 미리 써 둔 응답(비용 0원, 화면 개발용),
+      그 밖에는 실제 Claude(ANTHROPIC_API_KEY 필요).
       테스트는 API를 부르지 않도록 항상 가짜를 넣는다.
     """
     db_path = db_path or os.getenv('CHECKPOINT_DB_PATH', DEFAULT_DB_PATH)
+    # 공고 정리 방법: 'claude'(실제) / 'fixture'(미리 써 둔 응답) / 'custom'(테스트가 직접 넣음).
+    # 오타는 parse_mode가 서버 시작 때 막는다.
+    if extractor is None:
+        normalize_mode = parse_mode(os.getenv('NORMALIZE_MODE'))
+        extractor = make_extractor(normalize_mode)
+    else:
+        normalize_mode = 'custom'
 
     # [lifespan — 서버가 켜질 때 / 꺼질 때 할 일]
     # yield 앞: 서버가 켜질 때 한 번 실행 (DB 연결 열기, 그래프 만들기)
@@ -75,7 +84,8 @@ def create_app(db_path: str | None = None, extractor: Extractor | None = None) -
     # 서버가 살아 있는지 확인하는 주소. GET /health → {"status": "ok"}
     @app.get('/health')
     def health() -> dict[str, str]:
-        return {'status': 'ok'}
+        # normalize_mode: 프론트가 'fixture'면 '시연 모드' 표시를 띄운다.
+        return {'status': 'ok', 'normalize_mode': normalize_mode}
 
     # 세션 관련 주소들(/sessions ...)은 api/sessions.py에 모아 두고 여기서 붙인다.
     app.include_router(sessions_router)
