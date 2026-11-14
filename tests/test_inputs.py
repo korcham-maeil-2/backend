@@ -750,6 +750,20 @@ def test_claude_transcriber_connection_error():
         ClaudeTranscriber(_client(FakeCreate(error=err)))(ImageSource('a', 's', ONE_IMAGE * 2))
 
 
+def test_claude_transcriber_missing_api_key_is_read_error(sdk_client_without_key, caplog):
+    """리뷰(backend#28)에서 찾은 경우: 키 없이 켠 서버. SDK의 TypeError도 ReadError(→502)."""
+    with pytest.raises(ReadError) as info:
+        ClaudeTranscriber(sdk_client_without_key)(ImageSource('a', 's', ONE_IMAGE))
+    assert isinstance(info.value.__cause__, TypeError)
+    assert 'ANTHROPIC_API_KEY' in caplog.text
+
+
+def test_claude_transcriber_other_type_error_is_not_hidden():
+    err = TypeError('unexpected keyword')
+    with pytest.raises(TypeError, match='unexpected keyword'):
+        ClaudeTranscriber(_client(FakeCreate(error=err)))(ImageSource('a', 's', ONE_IMAGE))
+
+
 # ── 9) Fable 코드 검토에서 나온 경우 ─────────────────────────────────
 
 

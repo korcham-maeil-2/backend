@@ -86,6 +86,23 @@ class NormalizeError(Exception):
     """공고 정리(LLM 호출)가 실패했을 때. message는 사용자에게 보여 줘도 되는 한국어."""
 
 
+# 서버에 API 키(인증 수단)가 하나도 없을 때 SDK가 요청 직전에 내는 TypeError의 문장.
+# AnthropicError가 아니라서 따로 잡아야 한다 (안 잡으면 500 INTERNAL_ERROR가 된다).
+# SDK를 올리다 문장이 바뀌면 tests/test_normalize.py의 계약 테스트가 알려 준다.
+_MISSING_AUTH_MESSAGE = 'Could not resolve authentication method'
+
+
+def is_missing_api_key(error: BaseException) -> bool:
+    """키가 없어서 난 SDK 오류인지.
+
+    다른 TypeError(우리 코드 버그)는 False → 숨기지 않고 그대로 500으로 드러낸다.
+    """
+    return isinstance(error, TypeError) and _MISSING_AUTH_MESSAGE in str(error)
+
+
+MISSING_API_KEY_LOG = 'Claude API 키가 없습니다: 서버 환경 변수 ANTHROPIC_API_KEY를 확인하세요'
+
+
 class Extractor(Protocol):
     """공고 글 → ExtractionResult. 실제로는 ClaudeExtractor, 테스트에서는 가짜를 넣는다."""
 
@@ -160,8 +177,13 @@ class ClaudeExtractor:
             logger.error('Claude API 연결 실패')
             raise NormalizeError('공고 정리 서버에 연결하지 못했습니다.') from e
         except anthropic.AnthropicError as e:
-            # 키가 없을 때 등. 원인 문장에 키 값이 들어가지 않는다.
+            # 그 밖의 SDK 오류. 원인 문장에 키 값이 들어가지 않는다.
             logger.error('Claude 클라이언트 오류: %s', type(e).__name__)
+            raise NormalizeError('공고를 정리하는 중 문제가 생겼습니다.') from e
+        except TypeError as e:
+            if not is_missing_api_key(e):
+                raise
+            logger.error(MISSING_API_KEY_LOG)
             raise NormalizeError('공고를 정리하는 중 문제가 생겼습니다.') from e
 
         if response.stop_reason == 'refusal':

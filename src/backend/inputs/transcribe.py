@@ -29,7 +29,12 @@ import anthropic
 
 from backend.inputs.errors import FileInputError, InputErrorCode, ReadError
 from backend.inputs.image import VisionImage
-from backend.normalize.llm import FALLBACK_BETA, MODEL
+from backend.normalize.llm import (
+    FALLBACK_BETA,
+    MISSING_API_KEY_LOG,
+    MODEL,
+    is_missing_api_key,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +148,12 @@ class ClaudeTranscriber:
             raise ReadError('이미지 읽기 서버에 연결하지 못했습니다.') from e
         except anthropic.AnthropicError as e:
             logger.error('Claude 클라이언트 오류: %s', type(e).__name__)
+            raise ReadError('이미지를 읽는 중 문제가 생겼습니다.') from e
+        except TypeError as e:
+            # 키가 없을 때 SDK는 TypeError를 낸다 (normalize/llm.py 참고). 다른 TypeError는 그대로.
+            if not is_missing_api_key(e):
+                raise
+            logger.error(MISSING_API_KEY_LOG)
             raise ReadError('이미지를 읽는 중 문제가 생겼습니다.') from e
 
         if response.stop_reason == 'refusal':

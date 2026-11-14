@@ -331,6 +331,37 @@ def test_claude_extractor_connection_error():
         ClaudeExtractor(fake_client(FakeMessages(error=err)))('공고')
 
 
+# 서버에 키가 없을 때 SDK가 내는 오류와 같은 모양 (anthropic 2.8, _client._validate_headers)
+MISSING_KEY = TypeError(
+    '"Could not resolve authentication method. Expected one of api_key, auth_token, '
+    'or credentials to be set. Or for the `Authorization` header to be explicitly omitted"'
+)
+
+
+def test_missing_api_key_with_real_sdk_is_normalize_error(sdk_client_without_key, caplog):
+    """리뷰(backend#28)에서 찾은 경우: 키 없이 켠 서버.
+    SDK가 TypeError를 내도 NormalizeError(→502)."""
+    with pytest.raises(NormalizeError) as info:
+        ClaudeExtractor(sdk_client_without_key)('공고')
+    assert isinstance(info.value.__cause__, TypeError)  # 연결 오류가 아니라 '키 없음'으로 막혔다
+    assert 'ANTHROPIC_API_KEY' in caplog.text  # 운영자는 로그에서 원인을 바로 안다
+
+
+def test_other_type_error_is_not_hidden():
+    """키 문제가 아닌 TypeError(우리 코드 버그)는 502로 숨기지 않고 그대로 올린다
+    (→ 500, 로그에 남음)."""
+    with pytest.raises(TypeError, match='unexpected keyword'):
+        ClaudeExtractor(fake_client(FakeMessages(error=TypeError('unexpected keyword'))))('공고')
+
+
+def test_missing_api_key_session_api_is_502(tmp_path):
+    extractor = ClaudeExtractor(fake_client(FakeMessages(error=MISSING_KEY)))
+    with TestClient(create_app(str(tmp_path / 'cp.sqlite'), extractor=extractor)) as c:
+        r = c.post('/sessions', json={'message': '공고'})
+    assert r.status_code == 502
+    assert r.json()['code'] == 'NORMALIZE_FAILED'
+
+
 def test_output_format_in_prompt_is_valid_json_schema():
     """프롬프트에 넣는 형식은 ExtractionResult에서 만든 JSON Schema다 (칸을 바꾸면 따라간다)."""
     from backend.normalize.llm import SYSTEM_TEXT
