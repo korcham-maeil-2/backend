@@ -246,45 +246,83 @@ def test_find_region_ambiguous_returns_none():
 
 
 class FakeMessages:
-    def __init__(self, response=None, error: Exception | None = None):
-        self.response, self.error, self.kwargs = response, error, None
+    """가짜 Claude: 정해 둔 답을 차례로 돌려주고, 받은 요청을 모아 둔다."""
 
-    def parse(self, **kwargs):
-        self.kwargs = kwargs
+    def __init__(self, *responses, error: Exception | None = None):
+        self.responses, self.error = list(responses), error
+        self.calls: list[dict] = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
         if self.error:
             raise self.error
-        return self.response
+        return self.responses.pop(0)
 
 
 def fake_client(messages: FakeMessages):
     return SimpleNamespace(beta=SimpleNamespace(messages=messages))
 
 
+def reply(text: str, stop_reason: str = 'end_turn'):
+    """Claude 답 모양. 생각 블록(빈 글)이 앞에 오는 실제 답처럼 만든다."""
+    return SimpleNamespace(
+        stop_reason=stop_reason,
+        content=[
+            SimpleNamespace(type='thinking', thinking=''),
+            SimpleNamespace(type='text', text=text),
+        ],
+    )
+
+
 def test_claude_extractor_request_and_result():
-    """요청 모양(모델·구조화 출력·fallback)을 확인하고, parsed_output을 그대로 돌려준다."""
+    """요청 모양(모델·fallback·형식이 담긴 시스템 프롬프트)을 확인하고,
+    JSON 답을 검사해 돌려준다."""
     llm = scenario_llm('near_pangyo')
-    messages = FakeMessages(SimpleNamespace(stop_reason='end_turn', parsed_output=llm))
+    messages = FakeMessages(reply(llm.model_dump_json()))
     text = scenario_text('near_pangyo')
 
     assert ClaudeExtractor(fake_client(messages))(text) == llm
-    kw = messages.kwargs
+    [kw] = messages.calls
     assert kw['model'] == MODEL == 'claude-sonnet-5-5'
-    assert kw['output_format'] is ExtractionResult
     assert kw['fallbacks'] == 'default'
+    assert 'output_format' not in kw  # 형식 강제(구조화 출력)는 쓰지 않는다 — 문법이 너무 커서 400
     assert kw['messages'] == [{'role': 'user', 'content': text}]
+    system = kw['system'][0]['text']
+    assert '"postings"' in system and 'JSON 객체 하나만' in system  # 형식은 프롬프트에
 
 
-@pytest.mark.parametrize(
-    'response',
-    [
-        SimpleNamespace(stop_reason='refusal', parsed_output=None),
-        SimpleNamespace(stop_reason='max_tokens', parsed_output=None),
-        SimpleNamespace(stop_reason='end_turn', parsed_output=None),
-    ],
-)
-def test_claude_extractor_bad_stop(response):
+def test_answer_with_code_fence_and_note_is_read():
+    """답 앞뒤에 ```json 표시나 설명이 붙어도 가장 바깥 {...}만 읽는다."""
+    llm = scenario_llm('down_naju')
+    raw = f'정리했습니다.\n```json\n{llm.model_dump_json()}\n```'
+    assert ClaudeExtractor(fake_client(FakeMessages(reply(raw))))('공고') == llm
+
+
+def test_wrong_shape_is_asked_again_once():
+    """모양이 틀린 답이 오면 무엇이 틀렸는지 알려 주고 한 번 다시 묻는다.
+    앞 답(생각 블록 포함)은 그대로 돌려준다."""
+    llm = scenario_llm('stay_ulsan')
+    bad = reply('{"postings": [{"company": "여울케미칼"}]}')
+    messages = FakeMessages(bad, reply(llm.model_dump_json()))
+
+    assert ClaudeExtractor(fake_client(messages))('공고') == llm
+    first, second = messages.calls
+    assert second['messages'][1] == {'role': 'assistant', 'content': bad.content}
+    assert 'postings.0.company' in second['messages'][2]['content']
+
+
+@pytest.mark.parametrize('answer', ['JSON이 아닌 답', '{"postings": "목록이 아님"}'])
+def test_wrong_shape_twice_is_normalize_error(answer):
+    messages = FakeMessages(reply(answer), reply(answer))
     with pytest.raises(NormalizeError):
-        ClaudeExtractor(fake_client(FakeMessages(response)))('공고')
+        ClaudeExtractor(fake_client(messages))('공고')
+    assert len(messages.calls) == 2  # 다시 묻는 건 한 번뿐
+
+
+@pytest.mark.parametrize('stop', ['refusal', 'max_tokens'])
+def test_claude_extractor_bad_stop(stop):
+    with pytest.raises(NormalizeError):
+        ClaudeExtractor(fake_client(FakeMessages(reply('', stop_reason=stop))))('공고')
 
 
 def test_claude_extractor_connection_error():
@@ -293,12 +331,12 @@ def test_claude_extractor_connection_error():
         ClaudeExtractor(fake_client(FakeMessages(error=err)))('공고')
 
 
-def test_extraction_schema_is_accepted_by_sdk():
-    """SDK가 ExtractionResult를 구조화 출력 JSON 스키마로 바꿀 수 있는지 (API 호출 없음)."""
-    from anthropic.lib._parse._transform import transform_schema
+def test_output_format_in_prompt_is_valid_json_schema():
+    """프롬프트에 넣는 형식은 ExtractionResult에서 만든 JSON Schema다 (칸을 바꾸면 따라간다)."""
+    from backend.normalize.llm import SYSTEM_TEXT
 
-    schema = transform_schema(ExtractionResult)
-    assert 'postings' in schema['properties']
+    schema = json.loads(SYSTEM_TEXT[SYSTEM_TEXT.index('{') :])
+    assert schema == ExtractionResult.model_json_schema()
 
 
 # ── 세션 API까지 ─────────────────────────────────────────────────
