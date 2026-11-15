@@ -118,7 +118,8 @@ class YouthCenterClient:
         self._api_key = api_key
         self._cache_path = Path(cache_path)
         self._http = http or httpx.Client(timeout=TIMEOUT)
-        self._failed_at: dict[str, float] = {}  # 시군구 코드 → 마지막으로 조회에 실패한 시각
+        # 시군구 코드 → (마지막으로 조회에 실패한 시각, 그때의 이유)
+        self._failed: dict[str, tuple[float, str]] = {}
         self._keep = keep
         self._ttl = ttl_seconds
         self._clock = clock
@@ -138,23 +139,21 @@ class YouthCenterClient:
         if cached is not None and self._clock() - cached[0] <= self._ttl:
             return cached[1]
         try:
-            if (
-                self._clock() - self._failed_at.get(zip_cd, float('-inf'))
-                < FAILURE_COOLDOWN_SECONDS
-            ):
-                # 방금 실패한 지역: 다시 기다리지 않고 바로 실패로 (생활비만 고쳐 다시 계산할 때 등)
-                raise SupportError('온통청년에 잠시 연결할 수 없어요. 잠시 후 다시 계산해 주세요.')
+            failed_at, reason = self._failed.get(zip_cd, (float('-inf'), ''))
+            if self._clock() - failed_at < FAILURE_COOLDOWN_SECONDS:
+                # 방금 실패한 지역: 기다리지 않고 같은 이유로 바로 실패 (키 오류면 그대로 알린다)
+                raise SupportError(reason)
             try:
                 fetched = _slim(self._fetch(zip_cd))
-            except SupportError:
-                self._failed_at[zip_cd] = self._clock()
+            except SupportError as e:
+                self._failed[zip_cd] = (self._clock(), str(e))
                 raise
         except SupportError:
             if cached is None:
                 raise
             logger.warning('온통청년 조회 실패 → 지난번에 받아 둔 목록을 씁니다 (%s)', zip_cd)
             return cached[1]
-        self._failed_at.pop(zip_cd, None)
+        self._failed.pop(zip_cd, None)
         # 쓸 정책만 남겨 저장한다 (관련 분류는 전체의 약 4분의 1 → 캐시도 그만큼 작다)
         policies = [p for p in fetched if self._keep is None or self._keep(p)]
         if fetched:  # 응답이 통째로 비면 잠깐의 오류일 수 있어 하루 동안 붙잡아 두지 않는다

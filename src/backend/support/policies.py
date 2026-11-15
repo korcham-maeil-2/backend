@@ -4,21 +4,19 @@
       1) 분류: 매달 남는 돈에 영향을 주는 것만 (주거, 금융·복지·문화)
       2) 지역: 다른 지역 지자체의 정책은 뺀다 (아래 '지역 거르기')
       3) 나이: 사용자 나이가 정책 나이 범위 안 (나이를 모르면 거르지 않고 안내만)
-      4) 신청 기간: 아래 '지금 신청할 수 있는 것과 지난 일정'
+      4) 신청 기간: 지금 신청할 수 있거나 곧 열리는 것만 (끝난 정책은 보여 주지 않는다)
 
 [지역 정책과 전국 정책]
 회사를 고르는 데 도움이 되는 것은 근무지마다 다른 '지역 정책'(시도·시군구)이다.
   - 지역 정책: 지역마다 따로 보여 준다.
   - 전국 정책(중앙부처): 어느 회사를 골라도 같으므로 지역마다 되풀이하지 않고 한 번만 따로.
 
-[지금 신청할 수 있는 것과 지난 일정]
-  - policies: 신청 중·상시·곧 시작·기간 모름. 주거 먼저, 마감 가까운 순으로 MAX_POLICIES개까지
-  - past: 신청이 끝난 지 1년이 안 된 지역 정책. 최근에 끝난 순으로 MAX_PAST개까지 ('지난 일정 참고')
-    '나주형 청년 취업자 주거비'처럼 해마다 여는 사업이 많고, 이사는 보통 다음 해라서 남긴다.
-    다만 신청할 수 있는 정책을 밀어내지 않게 따로 담는다 (나주는 지역 정책 32건 중 17건이 끝남).
-    끝난 전국 정책은 담지 않는다.
+[신청 기간]
+  - 신청 중·상시·곧 시작·기간 모름만 담는다. 신청이 끝난 정책은 담지 않는다 — 다시 열릴지,
+    열려도 조건이 같을지 아무도 장담할 수 없어서다 (화면은 '조건과 일정은 바뀔 수 있으니 신청 전에
+    확인해 주세요'로 안내한다).
   - 같은 사업이 해마다 따로 등록돼 있어('2025 …'·'2026 …') 연도를 뺀 이름이 같으면 하나만 남긴다.
-    신청 중 > 상시 > 곧 시작 > 기간 모름 > 끝남 순으로 고르고, 같으면 마감이 늦은 것.
+    신청 중 > 상시 > 곧 시작 > 기간 모름 순으로 고르고, 같으면 마감이 늦은 것.
 
 [나에게 맞는 것 먼저]
 정책 이름·키워드로 세 묶음으로 나눠 순서를 정한다 (빼지는 않는다, 자격은 신청 페이지에서 확인).
@@ -26,7 +24,7 @@
   general  그 밖의 청년 정책
   targeted 특정 대상 (자립준비청년·장애·한부모·가족돌봄·대학생·창업·농어업 등).
            가족 수가 1명(혼자)이면 신혼·출산·자녀 정책도 여기로
-순서: 신청할 수 있는 것 → 끝난 것, 그 안에서 moving → general → targeted, 주거 먼저, 마감 가까운 순.
+순서: moving → general → targeted, 그 안에서 주거 먼저, 마감 가까운 순 (상시·기간 모름은 뒤).
 
 [지역 거르기]
 API의 지역 코드(zipCd)만으로는 부족하다. '의성군으로 이사 오면 지원'처럼 다른 지자체가
@@ -70,9 +68,7 @@ from backend.support.youthcenter import PolicySource, SupportError
 logger = logging.getLogger(__name__)
 
 MAX_POLICIES = 10
-MAX_PAST = 5
 LOOKUP_THREADS = 4  # 지역 여러 곳을 동시에 조회 (캐시가 없으면 지역마다 1~3초)
-ENDED_KEEP_DAYS = 365  # 신청이 끝난 지역 정책을 이 기간까지 '지난 일정'으로 남긴다
 KST = timezone(timedelta(hours=9))
 
 # 대분류 이름이 두 벌 섞여 온다 (코드정의서 이름 / 응답 이름).
@@ -94,7 +90,7 @@ NATIONWIDE_ZIPS = 200
 SOURCE_NAME = '온통청년 청년정책 (youthcenter.go.kr)'
 SOURCE_URL = 'https://www.youthcenter.go.kr'
 
-ApplyStatus = Literal['open', 'always', 'upcoming', 'unknown', 'ended']
+ApplyStatus = Literal['open', 'always', 'upcoming', 'unknown']
 Scope = Literal['local', 'national']
 
 # 나에게 맞는 것 먼저 (모듈 설명): 정책 이름·키워드에서 찾는 말
@@ -117,7 +113,6 @@ _STATUS_RANK: dict[ApplyStatus, int] = {
     'always': 3,
     'upcoming': 2,
     'unknown': 1,
-    'ended': 0,
 }
 
 
@@ -141,8 +136,8 @@ class SupportPolicy(OutputModel):
     )
     apply_status: ApplyStatus = Field(
         description=(
-            'open=신청 기간 중, always=상시, upcoming=곧 시작, unknown=기간을 모름, '
-            'ended=신청이 끝남 (끝난 지 1년 안 된 지역 정책만. 해마다 여는 사업인지 확인)'
+            'open=신청 기간 중, always=상시, upcoming=곧 시작, unknown=기간을 모름 '
+            '(끝난 정책은 담지 않는다)'
         )
     )
     apply_period: str | None = Field(description="신청 기간 (예: '2026-04-01 ~ 2026-11-30')")
@@ -157,10 +152,6 @@ class RegionSupport(OutputModel):
     posting_ids: list[str] = Field(description='이 지역에 근무지가 있는 공고')
     policies: list[SupportPolicy] = Field(description='지금·곧 신청할 수 있는 지역 정책')
     matched: int = Field(description='신청할 수 있는 지역 정책 수 (보여 준 것보다 많을 수 있음)')
-    past: list[SupportPolicy] = Field(
-        description='신청이 끝난 지역 정책 (지난 일정 참고, 해마다 여는 사업이 많다)'
-    )
-    past_matched: int = Field(description='신청이 끝난 지역 정책 수')
     error: str | None = Field(default=None, description='조회하지 못한 이유 (해요체)')
 
 
@@ -230,24 +221,25 @@ def _windows(dates: list[date]) -> list[tuple[date, date]]:
 
 
 def _apply(policy: dict[str, Any], today: date) -> tuple[ApplyStatus, str | None] | None:
-    """(신청 상태, 기간 글자). 끝난 지 1년이 넘었거나 언제 끝났는지 모르면 None → 뺀다.
+    """(신청 상태, 기간 글자). 신청이 끝났으면 None → 뺀다.
 
     기간이 여러 번이면('20260101 ~ 20260131, 20260701 ~ 20260731') 오늘이 든 기간,
-    없으면 다음 기간, 그것도 없으면 마지막 기간을 본다 (사이 기간에 '신청 중'이 되지 않게).
+    없으면 다음 기간을 본다 (사이 기간에 '신청 중'이 되지 않게).
     """
     code = _text(policy, 'aplyPrdSeCd')
     if code == APPLY_ALWAYS:
         return 'always', '상시'
+    if code == APPLY_CLOSED:
+        return None
     dates = _dates(_text(policy, 'aplyYmd'))
     if not dates:
-        # 마감 코드인데 날짜가 없으면 언제 끝났는지 몰라 뺀다 (몇 해 전 사업도 이렇게 남아 있다)
-        return None if code == APPLY_CLOSED else ('unknown', None)
-    windows = _windows(dates)
-    start, end = next((w for w in windows if w[1] >= today), windows[-1])
-    period = f'{start:%Y-%m-%d} ~ {end:%Y-%m-%d}'
-    if code == APPLY_CLOSED or end < today:
-        return ('ended', period) if (today - end).days <= ENDED_KEEP_DAYS else None
-    return ('upcoming' if start > today else 'open'), period
+        return 'unknown', None
+    # 오늘이 든 기간, 없으면 다음 기간. 다 지났으면 끝난 정책
+    upcoming = [w for w in _windows(dates) if w[1] >= today]
+    if not upcoming:
+        return None
+    start, end = upcoming[0]
+    return ('upcoming' if start > today else 'open'), f'{start:%Y-%m-%d} ~ {end:%Y-%m-%d}'
 
 
 def _age_range(policy: dict[str, Any]) -> tuple[int, int]:
@@ -415,18 +407,13 @@ def _fit(policy: dict[str, Any], single: bool) -> Fit:
     return 'moving' if moving else 'general'
 
 
-def _order(policy: SupportPolicy) -> tuple[bool, int, bool, int]:
-    """보여 줄 순서: 신청할 수 있는 것 → 끝난 것, 그 안에서 나에게 맞는 것 → 주거 먼저.
-
-    신청할 수 있는 것은 마감 가까운 순(상시·기간 없음은 뒤), 끝난 것은 최근에 끝난 순.
-    """
-    ended = policy.apply_status == 'ended'
-    day = _deadline(policy).toordinal()
-    return ended, _FIT_RANK[policy.fit], policy.category != HOUSING, -day if ended else day
+def _order(policy: SupportPolicy) -> tuple[int, bool, int]:
+    """보여 줄 순서: 나에게 맞는 것 → 주거 먼저 → 마감 가까운 순 (상시·기간 모름은 뒤)."""
+    return _FIT_RANK[policy.fit], policy.category != HOUSING, _deadline(policy).toordinal()
 
 
 def _newer(a: SupportPolicy, b: SupportPolicy) -> SupportPolicy:
-    """같은 사업의 여러 해 치 가운데 남길 것: 신청 중 > 상시 > 곧 시작 > 기간 모름 > 끝남,
+    """같은 사업의 여러 해 치 가운데 남길 것: 신청 중 > 상시 > 곧 시작 > 기간 모름,
     같으면 마감이 늦은 것."""
     return max(a, b, key=lambda p: (_STATUS_RANK[p.apply_status], _deadline(p)))
 
@@ -442,8 +429,7 @@ def select_policies(
 
     single: 혼자 사는지 (가족 수 1명). 그러면 신혼·출산·자녀 정책을 아래로 내린다.
 
-    지역 정책은 신청이 끝난 지 1년 안 된 것도 남기고(ended), 전국 정책은 신청할 수 있는 것만.
-    같은 사업을 해마다 따로 등록한 것은 하나만 남긴다.
+    신청이 끝난 것은 뺀다. 같은 사업을 해마다 따로 등록한 것은 하나만 남긴다.
     """
     picked: dict[tuple[Scope, str, str], SupportPolicy] = {}
     for policy in raw:
@@ -453,7 +439,7 @@ def select_policies(
             continue
         owner = _scope(policy, region)
         apply = _apply(policy, today)
-        if owner is None or apply is None or (owner[0] == 'national' and apply[0] == 'ended'):
+        if owner is None or apply is None:
             continue
         (scope, level), (status, period) = owner, apply
         found = SupportPolicy(
@@ -539,8 +525,7 @@ def find_local_support(
 
     regions, national = [], {}
     for (lawd_cd, posting_ids), (found, error) in zip(postings.items(), looked_up, strict=True):
-        local = [p for p in found if p.scope == 'local' and p.apply_status != 'ended']
-        past = [p for p in found if p.scope == 'local' and p.apply_status == 'ended']
+        local = [p for p in found if p.scope == 'local']
         national |= {p.id: p for p in found if p.scope == 'national'}
         region = region_by_code(lawd_cd)
         regions.append(
@@ -550,8 +535,6 @@ def find_local_support(
                 posting_ids=posting_ids,
                 policies=local[:MAX_POLICIES],
                 matched=len(local),
-                past=past[:MAX_PAST],
-                past_matched=len(past),
                 error=error,
             )
         )

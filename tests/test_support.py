@@ -28,7 +28,7 @@ from backend.main import create_app
 from backend.normalize import build_rows
 from backend.normalize.checks import region_by_code
 from backend.support import SupportError, YouthCenterClient, find_local_support
-from backend.support.policies import MAX_PAST, MAX_POLICIES, select_policies
+from backend.support.policies import MAX_POLICIES, select_policies
 from backend.support.youthcenter import URL
 
 FIXTURES = Path(__file__).parent / 'fixtures' / 'support'
@@ -184,7 +184,7 @@ def test_failed_region_is_not_retried_for_a_while(tmp_path):
     client = client_with(handler, tmp_path, clock=lambda: now[0])
     with pytest.raises(SupportError, match='연결하지 못했어요'):
         client.policies_for(NAJU)
-    with pytest.raises(SupportError, match='잠시 연결할 수 없어요'):
+    with pytest.raises(SupportError, match='연결하지 못했어요'):  # 같은 이유로 바로 실패
         client.policies_for(NAJU)
     assert len(calls) == 1
     now[0] += 121
@@ -334,10 +334,9 @@ def test_apply_period():
         pol(plcyNo='2', plcyNm='상시', aplyPrdSeCd='0057002', aplyYmd=''),
         pol(plcyNo='3', plcyNm='곧 시작', aplyYmd='20270101 ~ 20270131'),
         pol(plcyNo='4', plcyNm='기간 모름', aplyYmd=''),
-        # 지역 정책은 끝난 지 1년 안이면 남긴다 (해마다 여는 사업이 많다)
+        # 신청이 끝난 것은 뺀다 (다시 열릴지, 조건이 같을지 장담할 수 없다)
         pol(plcyNo='5', plcyNm='올해 끝남', aplyYmd='20261019 ~ 20261030'),
-        pol(plcyNo='6', plcyNm='마감 코드', aplyPrdSeCd='0057003', aplyYmd='20260301 ~ 20260331'),
-        # 빼는 것: 1년 넘게 지남 / 마감 코드인데 날짜 없음 / 끝난 전국 정책
+        pol(plcyNo='6', plcyNm='마감 코드', aplyPrdSeCd='0057003', aplyYmd='20270101 ~ 20271231'),
         pol(plcyNo='7', plcyNm='작년 초 끝남', aplyYmd='20250101 ~ 20250131'),
         pol(plcyNo='8', plcyNm='언제 끝났는지 모름', aplyPrdSeCd='0057003', aplyYmd=''),
         pol(plcyNo='9', plcyNm='끝난 전국 정책', aplyYmd='20261001 ~ 20261031', **national),
@@ -348,8 +347,6 @@ def test_apply_period():
         '상시': ('always', '상시'),
         '곧 시작': ('upcoming', '2027-01-01 ~ 2027-01-31'),
         '기간 모름': ('unknown', None),
-        '올해 끝남': ('ended', '2026-10-19 ~ 2026-10-30'),
-        '마감 코드': ('ended', '2026-03-01 ~ 2026-03-31'),
     }
 
 
@@ -360,13 +357,13 @@ def test_apply_period():
         (date(2026, 3, 15), ('upcoming', '2026-07-01 ~ 2026-07-31')),
         (date(2026, 7, 10), ('open', '2026-07-01 ~ 2026-07-31')),
         (date(2026, 1, 10), ('open', '2026-01-01 ~ 2026-01-31')),
-        (date(2026, 11, 15), ('ended', '2026-07-01 ~ 2026-07-31')),
+        (date(2026, 11, 15), None),  # 두 기간 모두 끝남 → 뺀다
     ],
 )
 def test_several_application_windows(today, expected):
     policy = pol(aplyYmd='20260101 ~ 20260131, 20260701 ~ 20260731')
-    [p] = select_policies([policy], region_by_code(NAJU), 27, today)
-    assert (p.apply_status, p.apply_period) == expected
+    found = select_policies([policy], region_by_code(NAJU), 27, today)
+    assert [(p.apply_status, p.apply_period) for p in found] == ([expected] if expected else [])
 
 
 def test_same_program_registered_every_year_is_shown_once():
@@ -409,11 +406,11 @@ def test_same_name_from_city_and_district_are_different_programs():
 @pytest.mark.parametrize(
     ('older', 'newer'),
     [
-        # 신청 중 > 상시 > 곧 시작 > 기간 모름 > 끝남
+        # 신청 중 > 상시 > 곧 시작 > 기간 모름
         ({'aplyYmd': ''}, {'aplyYmd': '20260101 ~ 20261231'}),  # 기간 모름 < 신청 중
         ({'aplyYmd': '20270101 ~ 20270131'}, {'aplyYmd': '20261101 ~ 20261130'}),  # 곧 < 신청 중
         ({'aplyPrdSeCd': '0057002', 'aplyYmd': ''}, {'aplyYmd': '20261101 ~ 20261130'}),
-        ({'aplyYmd': '20261001 ~ 20261031'}, {'aplyYmd': '20270101 ~ 20270131'}),  # 끝남 < 곧
+        ({'aplyYmd': '20261001 ~ 20261031'}, {'aplyYmd': '20270101 ~ 20270131'}),  # 끝난 것은 빠짐
     ],
 )
 def test_the_edition_you_can_apply_to_now_is_kept(older, newer):
@@ -470,22 +467,15 @@ def test_family_size_comes_from_the_profile():
     assert married['regions'][0]['policies'][0]['fit'] == 'general'
 
 
-def test_order_open_first_housing_first_then_recently_ended():
+def test_order_housing_first_then_deadline():
     found = pick(
         pol(plcyNo='1', plcyNm='복지 상시', lclsfNm='복지문화', aplyPrdSeCd='0057002'),
-        pol(plcyNo='2', plcyNm='주거 봄에 끝남', aplyYmd='20260301 ~ 20260331'),
-        pol(plcyNo='3', plcyNm='주거 가을에 끝남', aplyYmd='20261001 ~ 20261031'),
+        pol(plcyNo='2', plcyNm='주거 내년 시작', aplyYmd='20270101 ~ 20270131'),
         pol(plcyNo='4', plcyNm='주거 상시', aplyPrdSeCd='0057002'),
         pol(plcyNo='5', plcyNm='주거 이번 달 마감', aplyYmd='20261101 ~ 20261130'),
     )
-    # 신청할 수 있는 것 먼저(주거 먼저), 그다음 끝난 것(최근에 끝난 순)
-    assert names(found) == [
-        '주거 이번 달 마감',
-        '주거 상시',
-        '복지 상시',
-        '주거 가을에 끝남',
-        '주거 봄에 끝남',
-    ]
+    # 주거(이사하는 사람에게 바로 쓰임) 먼저, 그 안에서 마감 가까운 순, 상시는 뒤
+    assert names(found) == ['주거 이번 달 마감', '주거 내년 시작', '주거 상시', '복지 상시']
 
 
 def test_display_fields():
@@ -565,20 +555,24 @@ def test_demo_regions_list_local_support_with_sources():
         assert r['error'] is None
         assert 0 < len(r['policies']) <= MAX_POLICIES <= r['matched']
         assert all(p['scope'] == 'local' and p['url'] for p in r['policies'])
-        # 지금 신청할 수 있는 것만 목록에, 끝난 것은 '지난 일정'에 따로 (밀어내지 않게)
-        assert all(p['apply_status'] != 'ended' for p in r['policies'])
-        assert r['past'] and all(p['apply_status'] == 'ended' for p in r['past'])
-        assert len(r['past']) <= MAX_PAST <= r['past_matched']
+        # 신청할 수 있거나 곧 열리는 것만 (끝난 정책은 보여 주지 않는다)
+        assert {p['apply_status'] for p in r['policies']} <= {
+            'open',
+            'always',
+            'upcoming',
+            'unknown',
+        }
         # 다른 지역 지자체 정책(화순군·의성군 등)은 섞이지 않는다
         agencies = ' '.join(p['agency'] or '' for p in r['policies'])
         assert not any(w in agencies for w in ('화순', '의성', '장흥'))
-    # 나주: 올해 신청이 끝났어도 해마다 여는 나주 주거 지원을 '지난 일정'으로 보여 준다
-    naju_past = [p['name'] for p in by_region['전남광주통합특별시 나주시']['past']]
-    assert '2026년 나주형 청년 취업자 주거비 지원사업' in naju_past
+    # 나주: 올해 신청이 끝난 '나주형 청년 취업자 주거비'(10/30 마감)는 보여 주지 않는다
+    assert '2026년 나주형 청년 취업자 주거비 지원사업' not in names_in(
+        by_region['전남광주통합특별시 나주시']
+    )
     assert '2026 청년 월세 지원' in names_in(by_region['서울특별시 강서구'])
     # 전국 정책은 지역마다 되풀이하지 않고 한 번만, 신청할 수 있는 것만
     assert out['national'] and out['national_matched'] >= len(out['national'])
-    assert all(p['scope'] == 'national' and p['apply_status'] != 'ended' for p in out['national'])
+    assert all(p['scope'] == 'national' for p in out['national'])
     assert len({p['id'] for p in out['national']}) == len(out['national'])
     assert out['source_url'] == 'https://www.youthcenter.go.kr'
     assert out['checked_on'] == '2026-11-15'
@@ -751,7 +745,7 @@ def test_local_support_endpoint_picks_again_for_today(tmp_path, monkeypatch):
 
         monkeypatch.setattr('backend.support.policies.today_kst', lambda: date(2026, 12, 5))
         region = c.get(f'/sessions/{sid}/local-support').json()['regions'][0]
-        assert region['policies'] == [] and region['past'][0]['apply_status'] == 'ended'
+        assert region['policies'] == []  # 그사이 신청이 끝났다
         # 저장된 목록(계산할 때 기준)은 그대로다 — 이 주소는 보기만 한다
         stored = c.get(f'/sessions/{sid}').json()['local_support']['regions'][0]
         assert stored['policies'][0]['apply_status'] == 'open'
