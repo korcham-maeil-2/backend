@@ -4,8 +4,17 @@ rates.py       2026년 4대보험 요율·기준 금액 (출처 포함)
 insurance.py   4대보험 근로자 부담액
 income_tax.py  근로소득세·지방소득세 (국세청 간이세액표, withholding_table_2024.csv)
 payroll.py     세후 월급(실수령액) 한 번에 계산
+remaining.py   월 잔여액 (통근 / 이사 두 경우, 값마다 출처·신뢰도)
 """
 
 from backend.calc.payroll import Payslip, monthly_net, monthly_net_from_annual
+from backend.calc.remaining import UserProfile, calculate_all, monthly_remaining
 
-__all__ = ['Payslip', 'monthly_net', 'monthly_net_from_annual']
+__all__ = [
+    'Payslip',
+    'UserProfile',
+    'calculate_all',
+    'monthly_net',
+    'monthly_net_from_annual',
+    'monthly_remaining',
+]

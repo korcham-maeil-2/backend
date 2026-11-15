@@ -17,6 +17,7 @@ from typing import Any
 
 from langgraph.types import interrupt
 
+from backend.calc.remaining import calculate_all
 from backend.graph.state import GraphState
 from backend.normalize import Extractor, build_rows
 
@@ -83,10 +84,13 @@ def confirm_table(state: GraphState) -> dict[str, Any]:
 
 
 def calculate(state: GraphState) -> dict[str, Any]:
-    """확인된 비교표로 매달 남는 돈을 계산한다."""
-    # TODO(#7, #8): 4대보험·세금·월 잔여액 계산 엔진을 연결한다.
-    #               숫자 계산은 LLM이 아니라 이 단계의 파이썬 코드가 한다 (설계 원칙).
-    return {'result': {'rows': len(state.get('table', [])), 'monthly_remaining': None}}
+    """확인된 비교표로 매달 남는 돈을 계산한다.
+
+    공고마다 '지금 집에서 통근'과 '회사 근처로 이사' 두 경우의 월 잔여액을 구한다
+    (backend/calc/remaining.py). 숫자 계산은 LLM이 아니라 이 파이썬 코드가 한다 (설계 원칙).
+    사용자 정보(user_profile)가 없으면 세후 월급까지만 계산하고 잔여액은 null로 둔다.
+    """
+    return {'result': calculate_all(state.get('table', []), state.get('user_profile'))}
 
 
 def write_report(state: GraphState) -> dict[str, Any]:
