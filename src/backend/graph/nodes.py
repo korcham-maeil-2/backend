@@ -1,7 +1,8 @@
 """그래프 노드 — 그래프 안에서 실제로 일을 하는 함수들.
 
 실행 순서:
-    route_input → normalize → confirm_table(여기서 멈춤) → get_rent → calculate → write_report
+    route_input → normalize → confirm_table(여기서 멈춤) ─┬→ get_rent → calculate ─┬→ write_report
+                                                        └→ get_local_support ───┘
 
 [노드 함수 규칙]
 - 인자로 현재 상태(state, 즉 GraphState dict)를 받는다.
@@ -13,6 +14,7 @@
 """
 
 import asyncio
+import logging
 from collections.abc import Callable
 from typing import Any
 
@@ -23,6 +25,9 @@ from backend.calc.summary import calculate_all
 from backend.graph.state import GraphState
 from backend.normalize import Extractor, build_rows
 from backend.public_data.rent import RentEstimator
+from backend.support import PolicySource, find_local_support
+
+logger = logging.getLogger(__name__)
 
 # 그래프가 멈춘 이유를 API에 알려 줄 때 쓰는 이름표.
 CONFIRM_TABLE = 'confirm_table'
@@ -67,6 +72,7 @@ def make_normalize(extract: Extractor) -> Callable[[GraphState], dict[str, Any]]
             'table_confirmed': False,
             'user_profile': None,
             'result': None,
+            'local_support': None,
             'report': None,
         }
 
@@ -122,7 +128,7 @@ def make_get_rent(estimator: RentEstimator | None) -> RunnableLambda:
         - 확인된 비교표의 근무지(시군구 코드)마다 한 번씩, 결과는 SQLite에 캐시
         - 사용자가 이사할 집 월세를 비워 두면 calculate가 이 값을 '추정'으로 쓴다
         - 조회에 실패해도 그래프는 멈추지 않는다 (그 지역만 status='missing')
-        TODO(#16): get_local_support(청년 지원 조회)와 병렬로 돌린다.
+        get_local_support(청년 지원 조회)와 동시에 돈다 (builder.py).
         """
         if estimator is None:
             return {'rent_estimates': {}}
@@ -133,6 +139,32 @@ def make_get_rent(estimator: RentEstimator | None) -> RunnableLambda:
         return asyncio.run(get_rent(state))
 
     return RunnableLambda(get_rent_sync, afunc=get_rent, name='get_rent')
+
+
+def make_get_local_support(
+    source: PolicySource | None,
+) -> Callable[[GraphState], dict[str, Any]]:
+    """get_local_support 노드를 만든다. source가 없으면(인증키 없음·테스트) 조회하지 않는다."""
+
+    def get_local_support(state: GraphState) -> dict[str, Any]:
+        """근무지 지역마다 받을 수 있는 청년 지원 정책을 온통청년에서 찾는다 (support/policies.py).
+
+        - 지역(시군구) 하나에 한 번 조회, 결과는 SQLite에 하루 캐시
+        - 나이(user_profile.age)·분류(주거, 금융·복지·문화)·신청 기간으로 거른다
+        - 조회에 실패해도 그래프는 멈추지 않는다 (그 지역 error에 이유)
+        동기 함수라 그래프를 비동기로 돌리면 LangGraph가 스레드에서 실행한다 (서버를 막지 않음).
+        """
+        if source is None:
+            return {'local_support': None}
+        try:
+            found = find_local_support(state.get('table'), state.get('user_profile'), source)
+        except Exception:
+            # 부가 정보라 실패해도 계산 결과는 그대로 보여 준다 (노드가 죽으면 세션이 갇힌다)
+            logger.exception('청년 지원 정책을 찾지 못했습니다')
+            return {'local_support': None}
+        return {'local_support': found}
+
+    return get_local_support
 
 
 def calculate(state: GraphState) -> dict[str, Any]:

@@ -153,6 +153,12 @@ class UserProfile(InputModel):
         le=MAX_KRW,
         description='매달 남아야 하는 목표 금액. 있으면 손익분기 기준으로 가장 먼저 쓴다',
     )
+    age: int | None = Field(
+        default=None,
+        ge=15,
+        le=99,
+        description='만 나이. 청년 지원 정책을 나이 조건으로 거르는 데만 쓴다 (계산에는 안 씀)',
+    )
 
     @model_validator(mode='after')
     def _children_fewer_than_family(self):

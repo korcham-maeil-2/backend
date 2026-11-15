@@ -12,6 +12,8 @@ wheels/
 # 환경 변수 (API 키 등) — 절대 커밋하지 않음
 .env
 .env.*
+# 키를 담은 다른 이름의 env 파일도 막는다 (예: FINLIFE_API_KEY.env)
+*.env
 !.env.example
 
 # 로컬 실행 데이터 (LangGraph 체크포인트 SQLite 등)

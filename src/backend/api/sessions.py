@@ -14,6 +14,8 @@
      POST /sessions/{id}/recalculate   {"profile": {...}, "table": [...] (고쳤을 때만)}
        → 공고를 다시 읽지 않고(Claude 호출 없음) 계산·리포트만 다시 → 새 결과 반환
   언제든 GET /sessions/{id} 로 현재 상태를 다시 볼 수 있다.
+  5) (결과 화면을 열 때) GET /sessions/{id}/local-support
+       → 근무지별 청년 지원을 오늘 날짜로 다시 고른다 (며칠 뒤 열어도 '신청 중'이 맞게)
 
 [async / await]
 async def 함수 안의 await는 "DB나 그래프 작업이 끝날 때까지 기다리되, 그동안 서버가
@@ -57,6 +59,7 @@ from backend.inputs.read import (
     safe_name,
 )
 from backend.normalize import NormalizeError
+from backend.support import LocalSupport, find_local_support
 
 # APIRouter: 관련된 주소들을 묶는 단위. prefix='/sessions'라서 아래 '/{session_id}'는
 # 실제로 '/sessions/{session_id}'가 된다. tags는 /docs 화면에서 묶어 보여 줄 이름.
@@ -134,6 +137,7 @@ async def _snapshot(graph: CompiledStateGraph, session_id: str) -> SessionRespon
         input_text='\n'.join(values.get('messages', [])),
         profile=_profile(values.get('user_profile')),
         result=_result(values.get('result')),
+        local_support=_local_support(values.get('local_support')),
         report=values.get('report'),
     )
 
@@ -145,6 +149,16 @@ def _profile(raw: dict | None) -> UserProfile | None:
         return UserProfile.model_validate(raw)
     except ValidationError:
         logger.warning('저장된 사용자 정보가 지금 모양과 맞지 않아 응답에서 뺐습니다')
+        return None
+
+
+def _local_support(raw: dict | None) -> LocalSupport | None:
+    if raw is None:
+        return None
+    try:
+        return LocalSupport.model_validate(raw)
+    except ValidationError:
+        logger.warning('저장된 청년 지원 목록이 지금 모양과 맞지 않아 응답에서 뺐습니다')
         return None
 
 
@@ -336,6 +350,8 @@ async def recalculate(
             'user_profile': profile,
             'rent_estimates': rents,
             'result': result,
+            # 근무지·나이가 바뀌었을 수 있어 다시 고른다 (같은 지역은 캐시라 바로 끝난다)
+            'local_support': await _local_support_for(request, table, profile),
         }
         report = nodes.write_report({**values, **update})
         await graph.aupdate_state(config, {**update, **report}, as_node='write_report')
@@ -357,6 +373,34 @@ async def _rents_for(request: Request, table: list[dict], saved: dict[str, dict]
         found = await estimator.estimate_many(new_codes)
         rents |= {c: e.model_dump(mode='json') for c, e in found.items()}
     return rents
+
+
+async def _local_support_for(
+    request: Request, table: list[dict], profile: dict | None
+) -> dict | None:
+    """비교표 근무지들의 청년 지원. 조회는 동기(네트워크·SQLite)라 스레드에서 돌린다."""
+    source = getattr(request.app.state, 'support_source', None)
+    if source is None:
+        return None
+    return await asyncio.to_thread(find_local_support, table, profile, source)
+
+
+@router.get('/{session_id}/local-support', responses=error_responses(404))
+async def get_local_support(session_id: str, request: Request) -> LocalSupport | None:
+    """근무지별 청년 지원을 오늘 날짜로 다시 고른다. 결과 화면이 열릴 때 부른다.
+
+    확인·다시 계산 때 저장한 목록은 그날 기준이라, 며칠 뒤 다시 열면 '신청 중'이던 정책이
+    이미 끝났을 수 있다. 같은 지역은 캐시(하루)라 바로 끝난다. 다시 고른 목록은 저장하지 않는다
+    (보기만 한다 — 세션 상태를 바꾸지 않으므로 자물쇠도 필요 없다).
+    계산을 마치기 전이거나 온통청년 키가 없으면 null.
+    """
+    graph = _graph(request)
+    current = await _snapshot(graph, session_id)  # 없는 세션이면 404
+    if current.status != 'completed':
+        return None
+    values = (await graph.aget_state(_config(session_id))).values
+    found = await _local_support_for(request, values.get('table', []), values.get('user_profile'))
+    return _local_support(found)
 
 
 @router.get('/{session_id}', responses=error_responses(404))

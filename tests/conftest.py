@@ -36,6 +36,8 @@ def no_real_anthropic_calls(monkeypatch):
     # 공공데이터포털(월세 실거래가)도 부르지 않는다: 키가 없으면 앱이 조회기를 만들지 않는다.
     # 월세 테스트는 가짜 조회기(rent_fetcher)를 직접 넣는다.
     monkeypatch.delenv('DATA_GO_KR_SERVICE_KEY', raising=False)
+    # 온통청년도 같다: 키가 없으면 조회하지 않는다. 청년 지원 테스트는 가짜 공급자를 넣는다.
+    monkeypatch.delenv('YOUTHCENTER_API_KEY', raising=False)
 
 
 @pytest.fixture

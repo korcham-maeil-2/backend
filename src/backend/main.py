@@ -27,6 +27,8 @@ from backend.inputs.read import FileReader, daily_budget_from_env
 from backend.inputs.transcribe import ClaudeTranscriber, FixtureTranscriber, Transcriber
 from backend.normalize import Extractor, make_extractor, parse_mode
 from backend.public_data.rent import HttpRentFetcher, RentCache, RentEstimator, RentFetcher
+from backend.support import PolicySource, is_relevant, source_from_env
+from backend.support.youthcenter import API_KEY_ENV as YOUTHCENTER_KEY_ENV
 
 # 그래프 상태를 저장할 SQLite 파일 위치 (Docker에서는 이 경로를 볼륨에 둔다).
 # SQLite는 별도 DB 서버 없이 파일 하나로 동작하는 데이터베이스다.
@@ -50,6 +52,7 @@ def create_app(
     extractor: Extractor | None = None,
     transcriber: Transcriber | None = None,
     rent_fetcher: RentFetcher | None = None,
+    support_source: PolicySource | None = None,
 ) -> FastAPI:
     """FastAPI 앱을 만들어 돌려준다.
 
@@ -64,6 +67,8 @@ def create_app(
     rent_fetcher: 국토부 실거래가 조회. 안 주면 환경 변수 DATA_GO_KR_SERVICE_KEY가 있을 때만
       실제 공공데이터포털을 부른다 (무료, 결과는 같은 SQLite 파일에 캐시).
       키도 없으면 월세를 조회하지 않는다.
+    support_source: 온통청년 청년정책 조회. 안 주면 환경 변수 YOUTHCENTER_API_KEY가 있을 때만
+      실제 API를 부른다 (무료, 결과는 같은 SQLite 파일에 하루 캐시). 키도 없으면 조회하지 않는다.
     """
     db_path = db_path or os.getenv('CHECKPOINT_DB_PATH', DEFAULT_DB_PATH)
     # 공고 정리 방법: 'claude'(실제) / 'fixture'(미리 써 둔 응답) / 'custom'(테스트가 직접 넣음).
@@ -106,7 +111,12 @@ def create_app(
                 RentEstimator(rent_fetcher, RentCache(db_path)) if rent_fetcher else None
             )
             app.state.rent_estimator = rent_estimator
-            app.state.graph = build_graph(saver, extractor, rent_estimator)
+            # 캐시 표를 만들 때 db_path 폴더가 있어야 해서 여기서 만든다
+            source = support_source or source_from_env(db_path, keep=is_relevant)
+            if source is None:
+                logger.info('YOUTHCENTER_API_KEY가 없어 청년 지원 정책을 조회하지 않습니다.')
+            app.state.support_source = source
+            app.state.graph = build_graph(saver, extractor, rent_estimator, source)
             app.state.file_reader = file_reader
             yield
 
@@ -131,10 +141,15 @@ def create_app(
     )
 
     # 서버가 살아 있는지 확인하는 주소. GET /health → {"status": "ok"}
+    # 청년 지원을 찾을 수 있는지 (공급자를 넣었거나 온통청년 키가 있음).
+    # 화면이 나이 칸을 보일지 정한다
+    local_support = support_source is not None or bool(os.getenv(YOUTHCENTER_KEY_ENV, '').strip())
+
     @app.get('/health')
-    def health() -> dict[str, str]:
+    def health() -> dict[str, str | bool]:
         # normalize_mode: 프론트가 'fixture'면 '시연 모드' 표시를 띄운다.
-        return {'status': 'ok', 'normalize_mode': normalize_mode}
+        # local_support: false면 나이 칸을 숨긴다 (나이는 청년 지원을 고르는 데만 쓴다)
+        return {'status': 'ok', 'normalize_mode': normalize_mode, 'local_support': local_support}
 
     # 세션 관련 주소들(/sessions ...)은 api/sessions.py에 모아 두고 여기서 붙인다.
     app.include_router(sessions_router)
