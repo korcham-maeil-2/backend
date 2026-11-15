@@ -324,6 +324,8 @@ def test_temporary_housing_support_gives_after_support_answer():
     baseline, _ = pick_baseline([], profile)
     move = break_even(ulsan, profile, baseline).cases[1]
     assert move.during_support_annual_salary_krw < move.annual_salary_krw
+    assert move.support_excluded is True
+    assert move.floor is None
     assert any('6개월 뒤 끝나므로' in n for n in move.notes)
     # 지원을 뺀 행에서 손익분기 조건이 참이다
     plain = ulsan.model_copy(deep=True)
@@ -338,7 +340,7 @@ def test_any_salary_enough_is_raised_to_minimum_wage():
     baseline, _ = pick_baseline([], profile)
     commute = break_even(ulsan, profile, baseline).cases[0]
     assert commute.annual_salary_krw == 25_890_000  # 최저임금 연 25,882,560원을 만 원 단위로 올림
-    assert any('최저임금' in n for n in commute.notes)
+    assert commute.floor == 'minimum_wage'  # 화면이 '최저임금 수준만 받아도…'로 쓴다
 
 
 def test_status_includes_estimated_allowance():

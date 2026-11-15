@@ -385,15 +385,17 @@ def _scenario(
     )
 
 
-def _notes(row: ComparisonRow) -> list[str]:
+def _notes(row: ComparisonRow, has_net: bool) -> list[str]:
+    """화면에 함께 보여 줄 안내. 남는 돈에 관한 안내는 남는 돈을 계산했을 때만 단다
+    (연봉 비공개 공고는 손익분기 연봉 쪽 안내가 대신한다 — break_even.py)."""
     notes = []
     rate, months = row.probation_pay_rate.value, row.probation_months.value
     if months and rate is not None and rate < 1:
-        notes.append(f'수습 {months}개월 동안은 급여의 {rate:.0%}만 받아 실제로는 더 적습니다.')
-    if row.housing_allowance_monthly_krw.value and row.housing_allowance_months.value:
+        notes.append(f'수습 {months}개월 동안은 급여의 {rate:.0%}만 받아 그동안은 덜 남습니다.')
+    if has_net and row.housing_allowance_monthly_krw.value and row.housing_allowance_months.value:
         notes.append(
             f'주거지원비는 {row.housing_allowance_months.value}개월 뒤 끝나 '
-            '그때부터 이사 경우 잔여액이 줄어듭니다.'
+            '그때부터 이사하면 남는 돈이 줄어듭니다.'
         )
     if row.overtime.value:
         notes.append('연장근로수당은 금액을 알 수 없어 계산에 넣지 않았습니다.')
@@ -406,14 +408,14 @@ def monthly_remaining(row: ComparisonRow, profile: UserProfile | None) -> Postin
     profile이 None이면(사용자 정보를 아직 못 받음) 세후 월급만 계산하고
     월 잔여액은 null, missing에 필요한 값을 적는다.
     """
-    notes = _notes(row)
     allowances = _allowances(row)
+    notes: list[str] = []
     try:
         net, slip, net_notes = _net_income(row, profile or UserProfile(), allowances)
-        notes += net_notes
+        notes = _notes(row, has_net=net.value is not None) + net_notes
     except ValueError as e:  # 간이세액표 범위 밖 등
         net, slip = Item(label='세후 월급', value=None, status='missing', source=str(e)), None
-        notes.append(f'세후 월급을 계산하지 못했습니다: {e}')
+        notes = [*_notes(row, has_net=False), f'세후 월급을 계산하지 못했습니다: {e}']
     if profile is None and net.value is not None:
         # 가족 수를 몰라 1인 가구로 계산했으므로 '확인'이라고 할 수 없다
         net = net.model_copy(update={'status': weakest([net.status, 'estimated'])})

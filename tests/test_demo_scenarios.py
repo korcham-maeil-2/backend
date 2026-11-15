@@ -232,6 +232,17 @@ def test_user_a_pangyo_vs_naju():
     # 지원이 끝난 뒤에도 같은 돈이 남으려면 판교보다 더 받아야 한다
     assert move['during_support_annual_salary_krw'] < 36_000_000 < move['annual_salary_krw']
     assert any('24개월 뒤 끝나므로' in n for n in move['notes'])
+    # 화면은 공고 안내와 손익분기 안내를 함께 보여 준다 → 같은 안내가 두 번 나오지 않는다
+    shown = postings['down_naju']['notes'] + move['notes']
+    assert sum('수습' in n for n in shown) == 1
+    assert sum('주거지원비' in n for n in shown) == 1
+    # 화면이 그대로 쓰는 값: 지원이 끝난 뒤 주거비(40만, 지원 20만을 빼지 않음)와 그때의 세후 월급
+    assert move['housing']['value'] == 400_000
+    fixed = 205_000
+    assert (
+        move['net_income_krw'] - 400_000 - move['transport']['value'] - fixed
+        == (move['monthly_remaining'])
+    )
 
 
 def test_user_b_seoul_vs_ulsan():
