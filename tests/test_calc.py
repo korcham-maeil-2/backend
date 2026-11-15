@@ -5,6 +5,8 @@
   (2026년 10월분, 공제 내역이 2026년 요율대로 계산돼 있음. 값은 users/user_c.json에도 있음)
 - 간이세액표: 국세청 홈택스 「소득세법 시행령 [별표2] 근로소득 간이세액표 <개정 2024. 2. 29.>」 PDF
   https://teht.hometax.go.kr/doc/sf/a/a/근로소득_간이세액표(조견표).pdf  (쪽 번호를 함께 적음)
+  본표는 2026. 2. 27. 개정판(법제처)과 같다 (test_withholding_table_matches_2026_original).
+  자녀 공제 금액만 2026판 값을 쓴다.
 - 손계산: 요율 × 금액을 손으로 계산한 값 (식을 주석에 적음)
 
 [실행] backend 폴더에서 uv run pytest tests/test_calc.py
@@ -92,10 +94,34 @@ def test_income_tax_more_than_11_family():
 
 
 def test_income_tax_children_deduction():
-    # 표 비고 3번 (2024.2.29 개정판): 8~20세 자녀 1명 12,500원, 2명 29,160원 공제
-    assert income_tax(3_000_000, family=2, children_8_to_20=1) == 56_850 - 12_500
-    # 11쪽 2,000~2,010천원 3명 6,600원 − 29,160원 → 음수면 0원
+    # 표 비고 3번 (2026.2.27 개정판): 8~20세 자녀 1명 20,830원, 2명 45,830원,
+    # 3명부터 45,830원 + 2명을 넘는 1명당 33,330원 공제
+    assert income_tax(3_000_000, family=2, children_8_to_20=1) == 56_850 - 20_830
+    # 6,000~6,020천원 가족 4명 376,970원 − (45,830 + 33,330)
+    assert income_tax(6_000_000, family=4, children_8_to_20=3) == 376_970 - 79_160
+    # 11쪽 2,000~2,010천원 3명 6,600원 − 45,830원 → 음수면 0원
     assert income_tax(2_000_000, family=3, children_8_to_20=2) == 0
+
+
+def test_withholding_table_matches_2026_original():
+    """표 파일이 2026.2.27 개정 [별표2] 원문(법제처)의 646행과 같은지 지문으로 고정한다.
+
+    지문은 2026-11-15에 법제처 원문 646행을 같은 방식으로 이어 붙여 계산한 값이다.
+    표를 고치면 이 테스트가 깨지니, 원문과 다시 대조한 뒤 지문을 바꾼다.
+    """
+    import csv
+    import hashlib
+
+    from backend.calc.income_tax import TABLE_PATH
+
+    with TABLE_PATH.open(encoding='utf-8') as f:
+        rows = list(csv.reader(f))[1:]
+    joined = '\n'.join(','.join(str(int(x)) for x in row) for row in rows)
+    assert len(rows) == 646
+    assert (
+        hashlib.sha256(joined.encode()).hexdigest()
+        == '78e6a9f83b927da2d62d6c9b6a7b094cb9b07a6d78afea29e8fd6612d6bf39f5'
+    )
 
 
 def test_income_tax_rejects_invalid_family():
