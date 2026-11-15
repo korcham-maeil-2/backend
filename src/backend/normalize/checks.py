@@ -146,6 +146,20 @@ def mentions_yearly_amount(quote: str) -> bool:
     return bool(re.search(r'연\d|연간\d|1년에\d|연봉\d', s)) and not re.search(r'월\d', s)
 
 
+def meal_in_salary_from(quote: str) -> bool | None:
+    """식대 금액 인용에서 연봉에 포함인지 읽는다. 포함 → True, 별도 → False, 모르면 None.
+
+    '월 20만원 별도 지급' → False, '월 20만원, 연봉에 포함' → True.
+    둘 다 있거나('포함 … 별도') 둘 다 없으면 None (정하지 않고 사용자에게 묻는다).
+    """
+    s = squash(quote)
+    included = '포함' in s
+    separate = bool(re.search(r'별도|연봉외|추가지급|추가로지급', s))
+    if included == separate:
+        return None
+    return included
+
+
 def months_in(quote: str) -> set[int]:
     """인용 안의 기간을 개월 수로 읽는다. '3개월' → 3, '2년간' → 24, '1년 6개월' → 18"""
     s = squash(quote)

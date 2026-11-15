@@ -64,7 +64,8 @@ SYSTEM_PROMPT = """\
    그 범주의 칸(주거지원비 0, 사택 false)을 모두 채운다.
    아예 언급이 없으면 null이다. '언급 없음'을 false나 0으로 바꾸지 않는다.
 6. 식대: 현금으로 주는 식대는 meal_allowance_monthly_krw, 연봉에 포함된다고 적혀 있으면
-   meal_allowance_in_salary=true. 회사가 밥을 주면(중식 제공, 구내식당) meals_provided=true.
+   meal_allowance_in_salary=true, '별도 지급'·'연봉 외'·'추가 지급'이면 false (quote는 그 구절).
+   회사가 밥을 주면(중식 제공, 구내식당) meals_provided=true.
 7. 주거: 주거지원비는 housing_allowance_monthly_krw와 지원 기간(housing_allowance_months, 개월).
    사택·기숙사 제공 여부는 company_housing.
 8. location은 근무지. sido·sigungu는 원문 표기대로 쓴다 (예: '전남', '나주시').

@@ -266,7 +266,26 @@ def _build_row(p: ExtractedPosting, text: str, row_id: str) -> tuple[ComparisonR
         probation_pay_rate=rate_cell(p.probation_pay_rate, text),
         overtime=text_cell(p.overtime, text),
     )
+    _fill_meal_in_salary(row)
     return row, region_ok
+
+
+def _fill_meal_in_salary(row: ComparisonRow) -> None:
+    """LLM이 '식대가 연봉에 포함인지'를 비워 뒀는데, 식대 인용에 '별도'·'포함'이 적혀 있으면 채운다.
+
+    예: '식대 월 20만원 별도 지급'인데 meal_allowance_in_salary가 null로 오는 경우가 실제로 있었다.
+    포함으로 계산하면 매달 남는 돈이 십몇만 원 적게 나온다.
+    식대 금액 인용이 원문에서 확인된(confirmed) 경우에만 그 인용을 근거로 쓴다.
+    """
+    meal, in_salary = row.meal_allowance_monthly_krw, row.meal_allowance_in_salary
+    if in_salary.value is not None or meal.status != 'confirmed' or not meal.source_text:
+        return
+    value = checks.meal_in_salary_from(meal.source_text)
+    if value is None:
+        return
+    row.meal_allowance_in_salary = BoolCell(
+        value=value, status='confirmed', source_text=meal.source_text
+    )
 
 
 def _cells(row: ComparisonRow) -> list[_Cell]:

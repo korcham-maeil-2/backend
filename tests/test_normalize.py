@@ -715,3 +715,48 @@ def test_out_of_range_llm_values_are_dropped():
     assert row.probation_pay_rate.value is None
     assert row.probation_pay_rate.status == 'missing'
     assert row.meal_allowance_monthly_krw.value is None
+
+
+# ── 식대 연봉 포함 여부 (LLM이 비워 둔 경우) ─────────────────────
+
+
+def test_meal_separate_filled_when_llm_leaves_it_empty():
+    """'월 20만원 별도 지급'인데 LLM이 포함 여부를 비워 두면, 식대 인용을 보고 '별도'로 채운다.
+
+    (배포 서버에서 실제 Claude가 비워 둔 일이 있었다 → 남는 돈이 매달 약 16만원 적게 나옴)
+    """
+    from backend.normalize.schema import ExtractedBool
+
+    row = _pangyo_with(meal_allowance_in_salary=ExtractedBool(value=None, quote=None))
+    assert row.meal_allowance_in_salary.value is False
+    assert row.meal_allowance_in_salary.status == 'confirmed'
+    assert row.meal_allowance_in_salary.source_text == '월 20만원 별도 지급 (비과세)'
+    assert all('식대가 연봉에' not in q for q in row.questions_to_ask)
+
+
+def test_meal_not_filled_from_unverified_quote():
+    from backend.normalize.schema import ExtractedBool, ExtractedMoney
+
+    row = _pangyo_with(
+        meal_allowance_monthly_krw=ExtractedMoney(value=200000, quote='3,600만원'),
+        meal_allowance_in_salary=ExtractedBool(value=None, quote=None),
+    )
+    # 식대 인용이 금액과 맞지 않으면(추정) 그 인용으로 정하지 않고 묻는다
+    assert row.meal_allowance_in_salary.value is None
+    assert any('식대가 연봉에' in q for q in row.questions_to_ask)
+
+
+@pytest.mark.parametrize(
+    ('quote', 'expected'),
+    [
+        ('월 20만원 별도 지급 (비과세)', False),
+        ('식대 월 20만원 (연봉 외 추가 지급)', False),
+        ('월 200,000원 현금 지급, 연봉에 포함', True),
+        ('식대 월 20만원', None),
+        ('식대 20만원 포함, 성과급 별도', None),
+    ],
+)
+def test_meal_in_salary_from(quote, expected):
+    from backend.normalize.checks import meal_in_salary_from
+
+    assert meal_in_salary_from(quote) is expected
