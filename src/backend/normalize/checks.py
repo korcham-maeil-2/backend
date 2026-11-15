@@ -147,7 +147,9 @@ def mentions_yearly_amount(quote: str) -> bool:
 
 
 # '포함하지 않는다'는 뜻 → 연봉 밖에서 따로 준다 (별도)
-_MEAL_NOT_INCLUDED = r'미포함|불포함|비포함|포함되지않|포함안|포함X|포함x'
+_MEAL_NOT_INCLUDED = (
+    r'미포함|불포함|비포함|포함되지않|포함하지않|포함아님|포함아니|포함안|포함X|포함x'
+)
 # 연봉 밖에서 준다는 표현. '별도'는 금액·식대 바로 뒤에 올 때만 본다
 # ('퇴직금 별도'는 식대와 상관없다)
 _MEAL_SEPARATE = (

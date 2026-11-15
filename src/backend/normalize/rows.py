@@ -44,7 +44,7 @@ from backend.normalize.schema import (
 
 REGION_QUESTION = '근무지 시·군·구 확인 (공고 표기로 지역 코드를 정하지 못함)'
 LOCATION_MISSING_QUESTION = '근무지 시·군·구 (공고에 없음)'
-OVERTIME_QUESTION = '한 달 예상 연장근로 시간 (모르면 0시간으로 계산)'
+OVERTIME_QUESTION = '한 달 예상 연장근로 시간'
 
 
 def _status(value, quote: str | None, text: str, matches: Callable[[str], bool]) -> FieldStatus:
@@ -173,57 +173,85 @@ def _label(field: str) -> str:
 def make_questions(row: ComparisonRow, region_ok: bool) -> list[Question]:
     """계산에 필요한데 비어 있는 칸을 보고 사용자에게 물을 것을 만든다 (가리키는 칸 이름과 함께).
 
+    빈 값은 모두 몰라도 계산된다 → 'optional'로, 비워 두면 어떻게 계산하는지(if_unknown)를
+    calc/remaining.py·break_even.py가 실제로 하는 대로 적는다. AI가 추정한 값만 'check'다.
     주거·통근처럼 사용자 사정(본가 통근인지 등)에 따라 달라지는 질문은 여기서 하지 않는다.
     그건 사용자 정보를 아는 뒤 단계가 맡는다.
     """
     q: list[Question] = []
 
-    def ask(text: str, *fields: str) -> None:
-        q.append(Question(text=text, fields=list(fields)))
+    def ask(text: str, *fields: str, if_unknown: str) -> None:
+        q.append(Question(text=text, fields=list(fields), if_unknown=if_unknown))
 
     st = row.salary_type
     salary_field = 'monthly_salary_krw' if st.value == 'monthly' else 'annual_salary_krw'
+    salary_unknown = '최소 얼마를 받아야 하는지 계산해요'  # 손익분기 연봉 (break_even.py)
     if st.value is None:
         ask(
             f'제시받은 연봉 (공고 표기: {st.source_text})'
             if st.source_text
             else '제시받은 연봉 (공고에 없음)',
             salary_field,
+            if_unknown=salary_unknown,
         )
     elif st.value == 'undisclosed':
-        ask('제시받은 연봉 (공고에 금액 없음)', salary_field)
+        ask('제시받은 연봉 (공고에 금액 없음)', salary_field, if_unknown=salary_unknown)
     elif st.value == 'annual' and row.annual_salary_krw.value is None:
-        ask('연봉 금액 (공고에서 금액을 읽지 못함)', 'annual_salary_krw')
+        ask('연봉 금액 (공고에서 금액을 읽지 못함)', 'annual_salary_krw', if_unknown=salary_unknown)
     elif st.value == 'monthly' and row.monthly_salary_krw.value is None:
-        ask('월급 금액 (공고에서 금액을 읽지 못함)', 'monthly_salary_krw')
+        ask(
+            '월급 금액 (공고에서 금액을 읽지 못함)', 'monthly_salary_krw', if_unknown=salary_unknown
+        )
 
     if row.probation_months.value and row.probation_pay_rate.value is None:
-        ask('수습 기간 급여 비율 (공고에 없음)', 'probation_pay_rate')
+        ask(
+            '수습 기간 급여 비율 (공고에 없음)',
+            'probation_pay_rate',
+            if_unknown='수습 중에도 급여를 다 받는 것으로 계산해요',
+        )
     if row.meal_allowance_monthly_krw.value and row.meal_allowance_in_salary.value is None:
-        ask('식대가 연봉에 포함되는지 (공고에 없음)', 'meal_allowance_in_salary')
+        ask(
+            '식대가 연봉에 포함되는지 (공고에 없음)',
+            'meal_allowance_in_salary',
+            if_unknown='연봉에 포함된 것으로 계산해요 (남는 돈이 적게 나오는 쪽)',
+        )
     if row.housing_allowance_monthly_krw.value and row.housing_allowance_months.value is None:
-        ask('주거지원비 지원 기간 (공고에 없음)', 'housing_allowance_months')
+        ask(
+            '주거지원비 지원 기간 (공고에 없음)',
+            'housing_allowance_months',
+            if_unknown='계속 받는 것으로 계산해요',
+        )
     if row.overtime.value is not None:
-        ask(OVERTIME_QUESTION)  # 시간을 넣는 칸은 없다 (계산 단계에서 묻는다)
+        # 시간을 넣는 칸은 없다 (계산 단계에서 묻는다)
+        ask(OVERTIME_QUESTION, if_unknown='0시간으로 계산해요')
+    region_unknown = '이 회사 지역의 월세·청년 지원은 찾지 못해요'
     if row.location.status == 'missing':
-        ask(LOCATION_MISSING_QUESTION, 'location')  # 월세 추정에 근무지가 필요하다
+        ask(LOCATION_MISSING_QUESTION, 'location', if_unknown=region_unknown)
     elif not region_ok:
-        ask(REGION_QUESTION, 'location')
+        ask(REGION_QUESTION, 'location', if_unknown=region_unknown)
 
-    estimated = [
+    # 꼭 볼 것: AI가 추정한 값, 이미지에서 옮겨 적은 값 (원본과 다를 수 있다)
+    def to_check(cell: object) -> bool:
+        return getattr(cell, 'status', None) == 'estimated' or getattr(cell, 'from_image', False)
+
+    checks = [
         (k, _label(k))
         for k in ComparisonRow.model_fields
-        if getattr(getattr(row, k), 'status', None) == 'estimated' and k != 'location'
+        if k != 'location' and to_check(getattr(row, k))
     ]
-    estimated += [
+    checks += [
         (f'other_allowances.{i}', f'기타 수당({a.name})')
         for i, a in enumerate(row.other_allowances)
-        if a.monthly_krw.status == 'estimated'
+        if to_check(a.monthly_krw)
     ]
-    if estimated:
-        ask(
-            '원문과 맞는지 확인이 필요한 값: ' + ', '.join(label for _, label in estimated),
-            *(field for field, _ in estimated),
+    if checks:
+        # 화면이 '확인해 주세요 · AI가 추정했거나 이미지에서 읽은 값' 묶음에 넣으므로 이름만 적는다
+        q.append(
+            Question(
+                text=', '.join(label for _, label in checks),
+                fields=[field for field, _ in checks],
+                kind='check',
+            )
         )
     return q
 
