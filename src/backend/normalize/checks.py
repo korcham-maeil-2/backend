@@ -231,6 +231,11 @@ class Region:
     sigungu: str
     selectable: bool  # false면 '성남시'처럼 구를 골라야 하는 상위 코드 (조회에 바로 못 씀)
 
+    @property
+    def name(self) -> str:
+        """화면에 쓰는 이름 ('서울특별시 강서구'). 시군구가 따로 없는 세종은 '세종특별자치시'."""
+        return self.sido if self.sigungu == self.sido else f'{self.sido} {self.sigungu}'
+
 
 @cache
 def load_regions() -> tuple[Region, ...]:
@@ -239,6 +244,16 @@ def load_regions() -> tuple[Region, ...]:
             Region(r['lawd_cd'], r['sido'], r['sigungu'], r['selectable'] == 'true')
             for r in csv.DictReader(f)
         )
+
+
+@cache
+def _regions_by_code() -> dict[str, Region]:
+    return {r.lawd_cd: r for r in load_regions()}
+
+
+def region_by_code(lawd_cd: str) -> Region | None:
+    """시군구 코드(5자리)로 코드표의 행을 찾는다. 없으면 None."""
+    return _regions_by_code().get(lawd_cd)
 
 
 def normalize_sido(sido: str | None) -> str | None:
