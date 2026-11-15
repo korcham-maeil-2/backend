@@ -29,7 +29,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, ValidationError, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from backend.calc import rates
 from backend.calc.payroll import Payslip, monthly_net
@@ -60,6 +60,18 @@ class Cost(BaseModel):
     # 'missing'은 받지 않는다. 값이 없으면 Cost 자체를 비운다(None) — 0원으로 계산되는 걸 막기 위해.
     status: Literal['confirmed', 'estimated', 'user_input'] = 'user_input'
     source: str | None = Field(default=None, description='값의 출처 (예: 국토부 실거래가 중앙값)')
+
+
+class CurrentJob(BaseModel):
+    """지금 다니는 회사 (손익분기 연봉의 '현상 유지' 기준). 지금 집에서 다닌다고 본다."""
+
+    annual_salary_krw: int = Field(ge=0, le=MAX_KRW, description='지금 세전 고정연봉(원)')
+    meal_nontaxable_monthly_krw: int = Field(
+        default=0, ge=0, le=MAX_KRW, description='연봉에 포함된 비과세 식대 월액(원)'
+    )
+    transport: Cost | None = Field(default=None, description='지금 회사까지 월 교통비')
+    status: Literal['confirmed', 'estimated', 'user_input'] = 'user_input'
+    source: str | None = Field(default=None, description='예: 2026년 10월 급여명세서')
 
 
 class FixedExpense(BaseModel):
@@ -106,6 +118,23 @@ class UserProfile(BaseModel):
     )
     postings: dict[str, PostingCosts] = Field(
         default_factory=dict, description='공고 ID(posting-1 …)별 비용'
+    )
+    baseline_posting_id: str | None = Field(
+        default=None,
+        description='손익분기 연봉의 기준 공고 ID. 비우면 월 잔여액이 가장 큰 공고',
+    )
+    baseline_case: Case | None = Field(
+        default=None,
+        description='기준 공고에서 쓸 경우 (commute/move). 비우면 그 공고에서 더 많이 남는 쪽',
+    )
+    current_job: CurrentJob | None = Field(
+        default=None, description='지금 회사. 있으면 손익분기 연봉의 기준 후보가 된다'
+    )
+    target_monthly_remaining: int | None = Field(
+        default=None,
+        ge=0,
+        le=MAX_KRW,
+        description='매달 남아야 하는 목표 금액. 있으면 손익분기 기준으로 가장 먼저 쓴다',
     )
 
     @model_validator(mode='after')
@@ -409,35 +438,3 @@ def monthly_remaining(row: ComparisonRow, profile: UserProfile | None) -> Postin
         scenarios=[commute, move],
         notes=notes,
     )
-
-
-def calculate_all(table: list[dict] | None, profile: dict | None) -> dict:
-    """비교표 전체(dict 목록)와 사용자 정보(dict)로 공고별 결과를 만든다. calculate 노드가 부른다.
-
-    잘못된 값이 와도 그래프가 멈추지 않게, 문제가 있는 부분만 errors에 적고 나머지는 계산한다.
-    돌려주는 값은 체크포인터에 저장되도록 평범한 dict다.
-    """
-    errors: list[str] = []
-    user: UserProfile | None = None
-    if profile is not None:
-        try:
-            user = UserProfile.model_validate(profile)
-        except ValidationError as e:
-            errors.append(f'사용자 정보 형식이 잘못돼 사용하지 않았습니다: {e.error_count()}곳')
-
-    table = table or []
-    postings = []
-    for i, raw in enumerate(table, start=1):
-        try:
-            row = ComparisonRow.model_validate(raw)
-        except ValidationError as e:
-            errors.append(f'{i}번째 공고 형식이 잘못돼 계산하지 못했습니다: {e.error_count()}곳')
-            continue
-        postings.append(monthly_remaining(row, user).model_dump(mode='json'))
-
-    return {
-        'rows': len(table),
-        'has_user_profile': user is not None,
-        'postings': postings,
-        'errors': errors,
-    }
