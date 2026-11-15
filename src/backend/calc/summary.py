@@ -7,6 +7,7 @@
 돌려주는 값은 체크포인터(SQLite)에 저장되도록 평범한 dict다.
 """
 
+import logging
 from typing import Any
 
 from pydantic import Field, ValidationError
@@ -20,6 +21,8 @@ from backend.calc.break_even import (
 )
 from backend.calc.remaining import OutputModel, PostingResult, UserProfile, monthly_remaining
 from backend.normalize.schema import ComparisonRow
+
+logger = logging.getLogger(__name__)
 
 
 class CalculationResult(OutputModel):
@@ -45,7 +48,7 @@ def calculate_all(table: list[dict] | None, profile: dict | None) -> dict[str, A
         try:
             user = UserProfile.model_validate(profile)
         except ValidationError as e:
-            errors.append(f'사용자 정보 형식이 잘못돼 사용하지 않았습니다: {e.error_count()}곳')
+            errors.append(f'사용자 정보 형식이 잘못돼서 쓰지 않았어요: {e.error_count()}곳')
 
     table = table or []
     rows, results = [], []
@@ -53,7 +56,7 @@ def calculate_all(table: list[dict] | None, profile: dict | None) -> dict[str, A
         try:
             row = ComparisonRow.model_validate(raw)
         except ValidationError as e:
-            errors.append(f'{i}번째 공고 형식이 잘못돼 계산하지 못했습니다: {e.error_count()}곳')
+            errors.append(f'{i}번째 공고 형식이 잘못돼서 계산하지 못했어요: {e.error_count()}곳')
             continue
         rows.append(row)
         results.append(monthly_remaining(row, user))
@@ -79,7 +82,7 @@ def _unknown_posting_ids(user: UserProfile, rows: list[ComparisonRow]) -> list[s
     unknown = sorted(given - ids)
     if not unknown:
         return []
-    return [f'비교표에 없는 공고 ID라 쓰지 않았습니다: {", ".join(unknown)}']
+    return [f'비교표에 없는 공고 ID라서 쓰지 않았어요: {", ".join(unknown)}']
 
 
 def _break_evens(
@@ -94,7 +97,7 @@ def _break_evens(
         return [], []
     if user is None:
         return [], [
-            '사용자 정보(지금 집 주거비·교통비 등)가 없어 손익분기 연봉을 계산하지 않았습니다.'
+            '사용자 정보(지금 집 주거비·교통비 등)가 없어서 손익분기 연봉을 계산하지 않았어요.'
         ]
 
     # 기준은 '지원이 끝난 뒤' 남는 돈으로 비교한다 (기준 공고의 주거지원비가 기준을 부풀리지 않게)
@@ -106,12 +109,13 @@ def _break_evens(
     if baseline.kind == 'posting':
         i = next(i for i, r in enumerate(rows) if r.id == baseline.posting_id)
         if long_rows[i][0] is not rows[i]:
-            notes.append('기준 공고의 주거지원비는 지원이 끝난 뒤 기준으로 비교했습니다.')
+            notes.append('기준 공고의 주거지원비는 지원이 끝난 뒤를 기준으로 비교했어요.')
 
     out = []
     for row in targets:
         try:
             out.append(break_even(row, user, baseline))
-        except ValueError as e:  # 계산 중 예상 못 한 값 — 이 공고만 건너뛰고 그래프는 계속
-            errors.append(f'{row.id} 손익분기 연봉을 계산하지 못했습니다: {e}')
+        except ValueError:  # 계산 중 예상 못 한 값 — 이 공고만 건너뛰고 그래프는 계속
+            logger.exception('손익분기 연봉 계산 실패: %s', row.id)  # 원문은 로그로만
+            errors.append(f'{row.company.value or row.id}의 최소 연봉을 계산하지 못했어요.')
     return out, notes

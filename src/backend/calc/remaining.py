@@ -1,6 +1,6 @@
 """월 잔여액 계산 — 매달 손에 남는 돈.
 
-    월 잔여액 = 실수령액 − 주거비 − 교통비 − 기타 고정비
+    월 잔여액 = 실수령액 − 주거비 − 교통비 − 고정비
 
 공고 1건마다 두 경우를 계산한다.
   - commute (지금 집에서 통근): 주거비 = 지금 집 주거비, 교통비 = 지금 집 → 회사 통근비
@@ -27,13 +27,17 @@
 이 파일은 숫자만 계산한다 (LLM 없음, 설계 원칙).
 """
 
+import logging
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from backend.calc import rates
 from backend.calc.payroll import Payslip, monthly_net
+from backend.calc.text import won
 from backend.normalize.schema import MAX_KRW, ComparisonRow, FieldStatus, MoneyCell, _Cell
+
+logger = logging.getLogger(__name__)
 
 Case = Literal['commute', 'move']
 CASE_LABELS: dict[Case, str] = {'commute': '지금 집에서 통근', 'move': '회사 근처로 이사'}
@@ -88,7 +92,7 @@ class CurrentJob(InputModel):
 
 
 class FixedExpense(InputModel):
-    """기타 고정비 한 줄 (학자금 상환, 통신비 등)."""
+    """고정비 한 줄 (학자금 상환, 통신비 등)."""
 
     name: str = Field(min_length=1)
     monthly_krw: int = Field(ge=0, le=MAX_KRW)
@@ -233,7 +237,7 @@ def _allowances(row: ComparisonRow) -> Item:
         label='회사 수당',
         value=sum(c.value for _, c in present),
         status=weakest([_status_of(c) for _, c in present]),
-        source=' + '.join(f'{n} {c.value:,}원' for n, c in present),
+        source=' + '.join(f'{n} {won(c.value)}' for n, c in present),
     )
 
 
@@ -272,7 +276,9 @@ def _net_income(
     kind, cell = picked
     base = _monthly_base(kind, cell)
     if base < MIN_MONTHLY_BASE:
-        reason = f'급여 금액({cell.value:,}원)이 너무 적어 계산하지 않음 (단위 확인 필요)'
+        reason = (
+            f'급여 금액({won(cell.value)})이 너무 적어서 계산하지 않았어요 (단위를 확인해 주세요)'
+        )
         return Item(label=label, value=None, status='missing', source=reason), None, []
     notes: list[str] = []
     meal, in_salary = row.meal_allowance_monthly_krw, row.meal_allowance_in_salary
@@ -292,31 +298,33 @@ def _net_income(
     if row.meals_provided.value is True:
         nontaxable = 0  # 식사를 현물로 주면 현금 식대는 과세
         if meal_krw:
-            notes.append('회사가 식사를 제공해 현금 식대는 비과세가 아닌 것으로 계산했습니다.')
+            notes.append('회사가 식사를 제공해서 현금 식대는 비과세가 아닌 것으로 계산했어요.')
     else:
         nontaxable = min(meal_krw, rates.MEAL_NONTAXABLE_LIMIT, gross)
     if allowances.value:
-        notes.append(f'회사 수당({allowances.source})은 과세 급여로 보고 세후 월급에 넣었습니다.')
+        notes.append(
+            f'회사 수당({allowances.source})은 세금을 내는 급여로 보고 세후 월급에 넣었어요.'
+        )
 
     slip = monthly_net(gross, nontaxable, profile.family, profile.children_8_to_20)
-    what = f'연봉 {cell.value:,}원 ÷ 12' if kind == 'annual' else f'월급 {cell.value:,}원'
+    what = f'연봉 {won(cell.value)} ÷ 12' if kind == 'annual' else f'월급 {won(cell.value)}'
     source = f'{what} → 4대보험·소득세를 뺀 값'
     return Item(label=label, value=slip.net, status=weakest(used), source=source), slip, notes
 
 
 def _fixed_expenses(profile: UserProfile | None) -> Item:
-    label = '기타 고정비'
+    label = '고정비'
     if profile is None:
         return Item(label=label, value=None, status='missing', source='사용자 정보 없음')
     if profile.fixed_expenses is None:
-        return Item(label=label, value=None, status='missing', source='기타 고정비를 아직 모름')
+        return Item(label=label, value=None, status='missing', source='고정비를 아직 몰라요')
     if not profile.fixed_expenses:
         return Item(label=label, value=0, status='user_input', source='고정비 없음 (사용자 답)')
     return Item(
         label=label,
         value=sum(e.monthly_krw for e in profile.fixed_expenses),
         status='user_input',
-        source=' + '.join(f'{e.name} {e.monthly_krw:,}원' for e in profile.fixed_expenses),
+        source=' + '.join(f'{e.name} {won(e.monthly_krw)}' for e in profile.fixed_expenses),
     )
 
 
@@ -347,7 +355,7 @@ def _move_housing(row: ComparisonRow, cost: Cost | None) -> Item:
         label=label,
         value=max(item.value - aid.value, 0),
         status=weakest([item.status, _status_of(aid)]),
-        source=f'{base} {item.value:,}원 − 주거지원비 {aid.value:,}원{period}',
+        source=f'{base} {won(item.value)} − 주거지원비 {won(aid.value)}{period}',
     )
 
 
@@ -391,14 +399,14 @@ def _notes(row: ComparisonRow, has_net: bool) -> list[str]:
     notes = []
     rate, months = row.probation_pay_rate.value, row.probation_months.value
     if months and rate is not None and rate < 1:
-        notes.append(f'수습 {months}개월 동안은 급여의 {rate:.0%}만 받아 그동안은 덜 남습니다.')
+        notes.append(f'수습 {months}개월 동안은 급여의 {rate:.0%}만 받아서 그동안은 덜 남아요.')
     if has_net and row.housing_allowance_monthly_krw.value and row.housing_allowance_months.value:
         notes.append(
             f'주거지원비는 {row.housing_allowance_months.value}개월 뒤 끝나 '
-            '그때부터 이사하면 남는 돈이 줄어듭니다.'
+            '그때부터 이사하면 남는 돈이 줄어요.'
         )
     if row.overtime.value:
-        notes.append('연장근로수당은 금액을 알 수 없어 계산에 넣지 않았습니다.')
+        notes.append('연장근로수당은 금액을 알 수 없어서 계산에 넣지 않았어요.')
     return notes
 
 
@@ -413,9 +421,13 @@ def monthly_remaining(row: ComparisonRow, profile: UserProfile | None) -> Postin
     try:
         net, slip, net_notes = _net_income(row, profile or UserProfile(), allowances)
         notes = _notes(row, has_net=net.value is not None) + net_notes
-    except ValueError as e:  # 간이세액표 범위 밖 등
-        net, slip = Item(label='세후 월급', value=None, status='missing', source=str(e)), None
-        notes = [*_notes(row, has_net=False), f'세후 월급을 계산하지 못했습니다: {e}']
+    except ValueError:  # 간이세액표 범위 밖 등 — 입력 검사로 막혀 있지만, 와도 계산은 계속한다
+        # 예외 글은 개발자용(합쇼체·원 단위 숫자)이라 화면에는 정해 둔 문장만 보낸다.
+        # 원문은 로그로 남긴다.
+        logger.exception('세후 월급 계산 실패: %s', row.id)
+        reason = '세후 월급을 계산하지 못했어요. 급여 칸을 확인해 주세요.'
+        net, slip = Item(label='세후 월급', value=None, status='missing', source=reason), None
+        notes = [*_notes(row, has_net=False), reason]
     if profile is None and net.value is not None:
         # 가족 수를 몰라 1인 가구로 계산했으므로 '확인'이라고 할 수 없다
         net = net.model_copy(update={'status': weakest([net.status, 'estimated'])})
@@ -442,7 +454,7 @@ def monthly_remaining(row: ComparisonRow, profile: UserProfile | None) -> Postin
         costs.move_possible,
     )
     if row.shuttle_bus.value:
-        notes.append('통근버스가 있어 통근 교통비가 줄어들 수 있습니다.')
+        notes.append('통근버스가 있어서 통근 교통비가 줄어들 수 있어요.')
     return PostingResult(
         posting_id=row.id,
         company=row.company.value,

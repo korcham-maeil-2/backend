@@ -45,6 +45,7 @@ from backend.calc.remaining import (
     monthly_remaining,
     weakest,
 )
+from backend.calc.text import won
 from backend.normalize.schema import ComparisonRow, FieldStatus
 
 STEP_KRW = 10_000  # 만 원 단위
@@ -133,8 +134,8 @@ def long_term(row: ComparisonRow) -> tuple[ComparisonRow, list[str]]:
         return row, notes
     copy = row.model_copy(deep=True)
     copy.housing_allowance_monthly_krw.value = None
-    period = f'{months}개월 뒤 끝나므로' if months else '지원 기간을 몰라'
-    notes.append(f'주거지원비 월 {aid:,}원은 {period} 지원이 끝난 뒤 기준으로 계산했습니다.')
+    period = f'{months}개월 뒤 끝나므로' if months else '지원 기간을 몰라서'
+    notes.append(f'주거지원비 월 {won(aid)}은 {period} 지원이 끝난 뒤를 기준으로 계산했어요.')
     return copy, notes
 
 
@@ -170,7 +171,7 @@ def current_job_baseline(profile: UserProfile) -> tuple[Baseline | None, list[st
     if profile.current_housing is None:
         missing.append('지금 집 주거비')
     if profile.fixed_expenses is None:
-        missing.append('기타 고정비')
+        missing.append('고정비')
     if missing:
         return None, missing
 
@@ -224,19 +225,21 @@ def pick_baseline(
             )
             if x
         )
-        notes.append(f'고른 기준({what})의 월 잔여액이 없어 가장 많이 남는 경우와 비교합니다.')
+        notes.append(
+            f'고른 기준({what})은 남는 돈을 알 수 없어서 가장 많이 남는 경우와 비교했어요.'
+        )
 
     current, current_missing = current_job_baseline(profile)
     if current_missing:
         notes.append(
-            '지금 회사 정보 중 ' + ', '.join(current_missing) + ' 값이 없어 '
-            '"지금 회사 그대로" 기준은 쓰지 못했습니다.'
+            '지금 회사 정보 중 ' + ', '.join(current_missing) + ' 값이 없어서 '
+            '"지금 회사 그대로" 기준은 쓰지 못했어요.'
         )
     candidates = postings + ([current] if current else [])
     if not candidates:
         if not current_missing:
             notes.append(
-                '비교할 기준이 없습니다. 지금 연봉이나 매달 남아야 하는 목표 금액을 알려 주세요.'
+                '비교할 기준이 없어요. 지금 연봉이나 매달 남아야 하는 목표 금액을 알려 주세요.'
             )
         return None, notes
     return max(candidates, key=lambda b: b.monthly_remaining), notes

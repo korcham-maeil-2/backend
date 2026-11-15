@@ -9,7 +9,7 @@
 가정값은 status='estimated'로 표시한다.
 
 모든 결과에 공통 규칙을 확인한다.
-  - 월 잔여액 = 세후 월급 − 주거비 − 교통비 − 기타 고정비 (값이 있을 때)
+  - 월 잔여액 = 세후 월급 − 주거비 − 교통비 − 고정비 (값이 있을 때)
   - 손익분기 연봉: 만 원 적으면 모자라고, 그 이상(300만 원까지 확인)이면 늘 기준만큼 남는다
 
 [실행] backend 폴더에서 uv run pytest tests/test_demo_scenarios.py
@@ -292,3 +292,47 @@ def test_graph_end_to_end_each_posting(pid):
     assert applicable, '적어도 한 경우는 해당한다'
     if posting['net_income']['value'] is not None:
         assert all(s['monthly_remaining'] is not None for s in applicable)
+
+
+# ── 4. 화면에 그대로 나가는 글: 해요체 + 한글 단위 금액 ─────────────────
+
+
+def _texts(value):
+    """결과 안의 모든 글자 (안내·출처·이유·오류)."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for v in value.values():
+            yield from _texts(v)
+    elif isinstance(value, list):
+        for v in value:
+            yield from _texts(v)
+
+
+@pytest.mark.parametrize(('uid', 'pids', 'make'), FLOWS, ids=[f[0] for f in FLOWS])
+def test_result_texts_are_friendly(uid, pids, make):
+    """결과 화면의 다른 문장(해요체)과 맞게 '~습니다'를 쓰지 않고, 금액은 '15만원'처럼 쓴다."""
+    import re
+
+    out, _, _ = run_flow(pids, make)
+    for text in _texts(out):
+        assert '습니다' not in text, text
+        # '150,000원'처럼 만 단위 없이 쓴 1만 원 이상 금액 ('5만 5,000원'의 '5,000원'은 괜찮다)
+        assert not re.search(r'(?<![\d,])(\d{2,3},\d{3}|\d{1,3}(,\d{3}){2,})원', text), text
+
+
+@pytest.mark.parametrize(
+    ('value', 'text'),
+    [
+        (0, '0원'),
+        (62_000, '6만 2,000원'),
+        (150_000, '15만원'),
+        (36_000_000, '3,600만원'),
+        (150_000_000, '1억 5,000만원'),
+        (-200_000, '−20만원'),
+    ],
+)
+def test_won_matches_frontend_format(value, text):
+    from backend.calc.text import won
+
+    assert won(value) == text

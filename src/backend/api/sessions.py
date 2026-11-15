@@ -184,7 +184,8 @@ async def _run_with_message(graph: CompiledStateGraph, message: str, session_id:
     await _run(graph, {'messages': [message]}, session_id)
 
 
-async def _run(graph: CompiledStateGraph, values: dict, session_id: str) -> None:
+async def _run(graph: CompiledStateGraph, values: dict | None, session_id: str) -> None:
+    """그래프를 실행한다. values=None이면 멈춘(실패한) 곳부터 이어서 실행한다."""
     try:
         await graph.ainvoke(values, _config(session_id))
     except NormalizeError as e:
@@ -258,10 +259,20 @@ async def send_message(session_id: str, body: MessageRequest, request: Request) 
     """
     graph = _graph(request)
     async with _locked(session_id):
-        await _snapshot(graph, session_id)  # 없는 세션이면 여기서 404
-        # 새 입력으로 다시 실행한다. messages 칸은 '뒤에 붙이기'라서(state.py 참고)
-        # 이전 메시지 + 새 메시지가 합쳐진 채로 처음 노드부터 다시 돈다.
-        await _run_with_message(graph, body.message, session_id)
+        current = await _snapshot(graph, session_id)  # 없는 세션이면 여기서 404
+        messages = (await graph.aget_state(_config(session_id))).values.get('messages', [])
+        if current.status == 'running' and body.message in messages:
+            # 공고를 정리하다 실패해(502) 실행 중에 멈춘 세션에, 이미 들어간 메시지를 다시 보냈다
+            # (마지막 것이 아니어도: A 실패 → B 실패 → A 다시).
+            # 다시 붙이지 않고 실패한 곳부터 이어서 실행한다.
+            # 세션마다 자물쇠가 있어서, 다른 요청이 실행 중인 상태를 여기서 볼 일은 없다
+            # (서버가 한 프로세스일 때 — Dockerfile의 uvicorn은 워커 하나).
+            await _run(graph, None, session_id)
+        else:
+            # 새 입력으로 다시 실행한다. messages 칸은 '뒤에 붙이기'라서(state.py 참고)
+            # 이전 메시지 + 새 메시지가 합쳐진 채로 처음 노드부터 다시 돈다.
+            # (실패해 멈춘 세션이어도 새 메시지로 처음부터 다시 돌면 풀린다)
+            await _run_with_message(graph, body.message, session_id)
         return await _snapshot(graph, session_id)
 
 
