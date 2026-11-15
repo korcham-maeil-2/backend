@@ -146,15 +146,28 @@ def mentions_yearly_amount(quote: str) -> bool:
     return bool(re.search(r'연\d|연간\d|1년에\d|연봉\d', s)) and not re.search(r'월\d', s)
 
 
+# '포함하지 않는다'는 뜻 → 연봉 밖에서 따로 준다 (별도)
+_MEAL_NOT_INCLUDED = r'미포함|불포함|비포함|포함되지않|포함안|포함X|포함x'
+# 연봉 밖에서 준다는 표현. '별도'는 금액·식대 바로 뒤에 올 때만 본다 ('퇴직금 별도'는 식대와 상관없다)
+_MEAL_SEPARATE = (
+    r'별도지급|별도로지급|연봉외|연봉과는?별도|연봉에서별도|추가지급|추가로지급|(?:원|식대)\)?별도'
+)
+# '포함'은 연봉(급여)과 붙어 있을 때만 본다 ('세금 포함', '4대보험 포함'은 식대와 상관없다)
+_MEAL_INCLUDED = r'(?:연봉|급여|기본급|월급)(?:에|안에|내|금액에)?포함'
+
+
 def meal_in_salary_from(quote: str) -> bool | None:
     """식대 금액 인용에서 연봉에 포함인지 읽는다. 포함 → True, 별도 → False, 모르면 None.
 
-    '월 20만원 별도 지급' → False, '월 20만원, 연봉에 포함' → True.
-    둘 다 있거나('포함 … 별도') 둘 다 없으면 None (정하지 않고 사용자에게 묻는다).
+    확실한 표현만 정하고, 나머지는 None으로 두어 사용자에게 묻는다 (틀린 값을 '확인'으로 넣는 것보다
+    묻는 쪽이 안전하다).
+      '월 20만원 별도 지급' · '연봉 미포함' · '연봉에 포함되지 않음' → False
+      '월 20만원, 연봉에 포함' → True
+      '세금 포함' · '퇴직금 별도' · '식대 월 20만원' · 포함과 별도가 함께 있음 → None
     """
     s = squash(quote)
-    included = '포함' in s
-    separate = bool(re.search(r'별도|연봉외|추가지급|추가로지급', s))
+    separate = bool(re.search(_MEAL_NOT_INCLUDED, s) or re.search(_MEAL_SEPARATE, s))
+    included = bool(re.search(_MEAL_INCLUDED, re.sub(_MEAL_NOT_INCLUDED, '', s)))
     if included == separate:
         return None
     return included
