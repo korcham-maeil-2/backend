@@ -1,7 +1,7 @@
 """사용자 정보 API 테스트 — 비교표 확인 때 사용자 정보를 보내면 월 잔여액이 나온다.
 
     POST /sessions/{id}/confirm  {"approved": true, "profile": {...}}  → 계산 결과
-    PUT  /sessions/{id}/profile  {...}                                 → 계산만 다시
+    POST /sessions/{id}/recalculate  {profile, table?}                   → 계산만 다시
 
 [실행] backend 폴더에서 uv run pytest tests/test_profile_api.py
 """
@@ -78,7 +78,7 @@ def test_invalid_profile_is_rejected_with_422(tmp_path):
         assert c.get(f'/sessions/{sid}').json()['status'] == 'awaiting_confirmation'
 
 
-def test_put_profile_recalculates_without_rebuilding_table(tmp_path):
+def test_recalculate_recalculates_without_rebuilding_table(tmp_path):
     extractor = FakeExtractor()
     with client(tmp_path / 'cp.sqlite', extractor) as c:
         sid = start(c)
@@ -90,7 +90,7 @@ def test_put_profile_recalculates_without_rebuilding_table(tmp_path):
         # 지금 집 월세를 10만 원 올리면 통근 잔여액만 10만 원 준다
         changed = pangyo_profile()
         changed['current_housing']['value'] += 100_000
-        r = c.put(f'/sessions/{sid}/profile', json=changed)
+        r = c.post(f'/sessions/{sid}/recalculate', json={'profile': changed})
         assert r.status_code == 200
         after = r.json()
         assert after['status'] == 'completed'
@@ -102,23 +102,23 @@ def test_put_profile_recalculates_without_rebuilding_table(tmp_path):
         assert after['profile']['current_housing']['value'] == changed['current_housing']['value']
 
         # 또 바꿔도 된다
-        r = c.put(f'/sessions/{sid}/profile', json=pangyo_profile())
+        r = c.post(f'/sessions/{sid}/recalculate', json={'profile': pangyo_profile()})
         assert remaining(r.json()) == remaining(first)
 
 
-def test_put_profile_before_confirm_is_409(tmp_path):
+def test_recalculate_before_confirm_is_409(tmp_path):
     with client(tmp_path / 'cp.sqlite') as c:
         sid = start(c)
-        r = c.put(f'/sessions/{sid}/profile', json=pangyo_profile())
+        r = c.post(f'/sessions/{sid}/recalculate', json={'profile': pangyo_profile()})
         assert r.status_code == 409
         assert r.json()['code'] == 'SESSION_NOT_COMPLETED'
         # 409 뒤에도 정상적으로 확인할 수 있다
         assert c.post(f'/sessions/{sid}/confirm', json={'approved': True}).status_code == 200
 
 
-def test_put_profile_unknown_session_is_404(tmp_path):
+def test_recalculate_unknown_session_is_404(tmp_path):
     with client(tmp_path / 'cp.sqlite') as c:
-        r = c.put('/sessions/nope/profile', json=pangyo_profile())
+        r = c.post('/sessions/nope/recalculate', json={'profile': pangyo_profile()})
         assert r.status_code == 404
 
 
@@ -193,14 +193,15 @@ def test_failed_recalculation_leaves_session_usable(tmp_path, monkeypatch):
             raise RuntimeError('계산 중 오류')
 
         monkeypatch.setattr(sessions, 'calculate_all', boom)
-        r = c.put(f'/sessions/{sid}/profile', json=pangyo_profile())
+        r = c.post(f'/sessions/{sid}/recalculate', json={'profile': pangyo_profile()})
         assert r.status_code == 500
         after = c.get(f'/sessions/{sid}').json()
         assert after['status'] == 'completed'
         assert after['result'] == first['result']  # 아무것도 바뀌지 않음
 
         monkeypatch.undo()
-        assert c.put(f'/sessions/{sid}/profile', json=pangyo_profile()).status_code == 200
+        r = c.post(f'/sessions/{sid}/recalculate', json={'profile': pangyo_profile()})
+        assert r.status_code == 200
 
 
 def test_concurrent_profile_updates_are_serialized(tmp_path):
@@ -226,7 +227,7 @@ def test_concurrent_profile_updates_are_serialized(tmp_path):
                     p['current_housing']['value'] += extra
                     profiles.append(p)
                 responses = await asyncio.gather(
-                    *(c.put(f'/sessions/{sid}/profile', json=p) for p in profiles)
+                    *(c.post(f'/sessions/{sid}/recalculate', json={'profile': p}) for p in profiles)
                 )
                 return profiles, [r.json() for r in responses]
 
@@ -262,3 +263,43 @@ def test_unknown_posting_id_in_profile_is_reported(tmp_path):
         done = c.post(f'/sessions/{sid}/confirm', json={'approved': True, 'profile': p}).json()
         [error] = done['result']['errors']
         assert 'posting-9' in error and 'posting-7' in error
+
+
+def test_recalculate_with_edited_table_does_not_call_llm(tmp_path):
+    """결과를 본 뒤 비교표를 고쳐도 새 세션 없이 다시 계산한다 (공고 정리 LLM은 안 부른다)."""
+    extractor = FakeExtractor()
+    with client(tmp_path / 'cp.sqlite', extractor) as c:
+        sid = start(c)
+        first = c.post(
+            f'/sessions/{sid}/confirm', json={'approved': True, 'profile': pangyo_profile()}
+        ).json()
+        calls = len(extractor.calls)
+
+        table = first['table']
+        table[0]['annual_salary_krw'] = {'value': 48_000_000, 'status': 'user_input'}
+        r = c.post(
+            f'/sessions/{sid}/recalculate', json={'profile': pangyo_profile(), 'table': table}
+        )
+        assert r.status_code == 200
+        after = r.json()
+        assert after['table'][0]['annual_salary_krw']['value'] == 48_000_000
+        assert remaining(after)['commute'] > remaining(first)['commute']  # 연봉이 올라 더 남는다
+        assert len(extractor.calls) == calls
+
+        # 다시 조회해도 고친 표·결과가 저장돼 있다
+        assert c.get(f'/sessions/{sid}').json()['result'] == after['result']
+
+
+def test_recalculate_rejects_empty_or_bad_table(tmp_path):
+    with client(tmp_path / 'cp.sqlite') as c:
+        sid = start(c)
+        c.post(f'/sessions/{sid}/confirm', json={'approved': True, 'profile': pangyo_profile()})
+        negative = {'value': -1}  # 음수 연봉
+        for body in (
+            {'profile': pangyo_profile(), 'table': []},  # 빈 표
+            {'profile': pangyo_profile(), 'table': [{'id': 'p', 'annual_salary_krw': negative}]},
+            {'table': None},  # 사용자 정보 없음
+        ):
+            r = c.post(f'/sessions/{sid}/recalculate', json=body)
+            assert r.status_code == 422, body
+        assert c.get(f'/sessions/{sid}').json()['status'] == 'completed'

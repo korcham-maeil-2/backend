@@ -11,8 +11,8 @@
   3) POST /sessions/{id}/confirm    {"approved": true}
        → 멈춘 곳부터 이어서 끝까지 실행 → status: "completed", 결과·리포트 반환
   4) (결과 화면에서 월세 등을 바꾸면)
-     PUT /sessions/{id}/profile        {사용자 정보}
-       → 비교표는 그대로 두고 계산·리포트만 다시 → 새 결과 반환
+     POST /sessions/{id}/recalculate   {"profile": {...}, "table": [...] (고쳤을 때만)}
+       → 공고를 다시 읽지 않고(Claude 호출 없음) 계산·리포트만 다시 → 새 결과 반환
   언제든 GET /sessions/{id} 로 현재 상태를 다시 볼 수 있다.
 
 [async / await]
@@ -40,6 +40,7 @@ from backend.api.schemas import (
     InputSummary,
     MessageRequest,
     PendingQuestion,
+    RecalculateRequest,
     SessionResponse,
 )
 from backend.calc.remaining import UserProfile
@@ -289,12 +290,15 @@ async def confirm_table(session_id: str, body: ConfirmRequest, request: Request)
         return await _snapshot(graph, session_id)
 
 
-@router.put('/{session_id}/profile', responses=error_responses(404, 409))
-async def update_profile(session_id: str, body: UserProfile, request: Request) -> SessionResponse:
-    """사용자 정보를 바꾸고 계산·리포트만 다시 한다 (결과 화면에서 월세 등을 바꿔 볼 때).
+@router.post('/{session_id}/recalculate', responses=error_responses(404, 409))
+async def recalculate(
+    session_id: str, body: RecalculateRequest, request: Request
+) -> SessionResponse:
+    """결과 화면에서 생활비나 비교표를 고쳤을 때, 계산·리포트만 다시 한다.
 
     비교표 확인을 마친(completed) 세션에서만 된다. 확인 전이면 /confirm에 함께 보낸다 → 409.
-    보낸 사용자 정보로 통째로 바꾼다 (PUT). 공고 정리(Claude 호출)는 다시 하지 않는다.
+    사용자 정보는 보낸 값으로 통째로 바꾸고, 비교표는 보냈을 때만 바꾼다.
+    공고 정리(Claude 호출)는 다시 하지 않는다 → 비용 0원, 바로 끝난다.
     """
     graph = _graph(request)
     config = _config(session_id)
@@ -311,12 +315,13 @@ async def update_profile(session_id: str, body: UserProfile, request: Request) -
         # (그래프를 calculate부터 다시 돌리면, 중간에 실패했을 때 세션이 '실행 중'에 멈춘다)
         # TODO(#19): write_report가 LLM을 부르게 되면, 숫자를 바꿀 때마다 리포트를 다시 쓸지 정한다.
         values = (await graph.aget_state(config)).values
-        profile = body.model_dump(mode='json')
-        result = calculate_all(values.get('table', []), profile)
-        report = nodes.write_report({**values, 'user_profile': profile, 'result': result})
-        await graph.aupdate_state(
-            config, {'user_profile': profile, 'result': result, **report}, as_node='write_report'
-        )
+        data = body.model_dump(mode='json')  # 체크포인터(SQLite)에 저장되는 평범한 값으로
+        profile = data['profile']
+        table = data['table'] if body.table is not None else values.get('table', [])
+        result = calculate_all(table, profile)
+        update = {'table': table, 'user_profile': profile, 'result': result}
+        report = nodes.write_report({**values, **update})
+        await graph.aupdate_state(config, {**update, **report}, as_node='write_report')
         return await _snapshot(graph, session_id)
 
 

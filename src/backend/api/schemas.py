@@ -63,6 +63,20 @@ class ConfirmRequest(BaseModel):
     )
 
 
+class RecalculateRequest(BaseModel):
+    """확인을 마친 세션을 다시 계산하는 요청 (결과 화면에서 생활비나 비교표를 고쳤을 때).
+
+    예: {"profile": {...}}  또는 비교표도 고쳤으면  {"profile": {...}, "table": [...]}
+    """
+
+    profile: UserProfile = Field(description='사용자 정보. 보낸 값으로 통째로 바꾼다')
+    table: list[ComparisonRow] | None = Field(
+        default=None,
+        min_length=1,
+        description='비교표를 고쳤을 때만 보낸다 (안 보내면 확인한 표 그대로)',
+    )
+
+
 class PendingQuestion(BaseModel):
     """그래프가 멈춘 이유와, 화면에 보여 줄 내용."""
 
