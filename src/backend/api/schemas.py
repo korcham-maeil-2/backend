@@ -18,6 +18,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from backend.calc.remaining import UserProfile
+from backend.calc.summary import CalculationResult
 from backend.inputs.limits import MAX_MESSAGE_CHARS
 from backend.inputs.read import InputKind, ReadMethod
 from backend.normalize.schema import ComparisonRow
@@ -51,6 +53,13 @@ class ConfirmRequest(BaseModel):
     table: list[ComparisonRow] | None = Field(
         default=None,
         description='사용자가 비교표를 고쳤을 때만 보낸다. 고친 칸은 status를 user_input으로',
+    )
+    profile: UserProfile | None = Field(
+        default=None,
+        description=(
+            '사용자 정보 (지금 집 주거비, 공고별 통근·이사 비용, 고정비, 지금 연봉 등). '
+            '보내면 월 잔여액·손익분기 연봉을 계산한다. 안 보내면 세후 월급까지만 계산'
+        ),
     )
 
 
@@ -102,5 +111,11 @@ class SessionResponse(BaseModel):
             '확인을 마친 세션을 다시 고칠 때 이 글로 새 세션을 만든다'
         ),
     )
-    result: dict[str, Any] | None = None
+    profile: UserProfile | None = Field(
+        default=None,
+        description='저장된 사용자 정보. 새로고침한 화면이 입력칸을 다시 채울 때 쓴다',
+    )
+    result: CalculationResult | None = Field(
+        default=None, description='계산 결과 (status가 completed일 때)'
+    )
     report: str | None = None

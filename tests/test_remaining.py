@@ -295,10 +295,9 @@ def test_calculate_all_handles_empty_table():
 def test_graph_end_to_end_has_remaining_per_posting_and_case():
     graph = build_graph(InMemorySaver(), FakeExtractor())
     config = {'configurable': {'thread_id': 't1'}}
-    graph.invoke(
-        {'messages': [scenario_text('near_pangyo')], 'user_profile': user_a_profile()}, config
-    )
-    state = graph.invoke(Command(resume={'approved': True}), config)
+    graph.invoke({'messages': [scenario_text('near_pangyo')]}, config)
+    # 사용자 정보는 비교표 확인 때 함께 보낸다 (API의 /confirm과 같은 모양)
+    state = graph.invoke(Command(resume={'approved': True, 'profile': user_a_profile()}), config)
 
     result = state['result']
     assert result['has_user_profile'] is True

@@ -29,7 +29,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from backend.calc import rates
 from backend.calc.payroll import Payslip, monthly_net
@@ -47,10 +47,23 @@ def weakest(statuses: list[FieldStatus]) -> FieldStatus:
     return max(statuses, key=_WEAKNESS.__getitem__, default='confirmed')
 
 
+class InputModel(BaseModel):
+    """사용자가 보내는 값. 모르는 칸(오타 등)은 조용히 버리지 않고 422로 알린다."""
+
+    model_config = ConfigDict(extra='forbid')
+
+
+class OutputModel(BaseModel):
+    """계산 결과. 기본값이 있어도 응답에는 항상 들어가므로, OpenAPI(→ 프론트 TS 타입)에서
+    '있을 수도 없을 수도 있는 칸(?:)'이 아니라 '항상 있는 칸'으로 보이게 한다."""
+
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)
+
+
 # ── 입력: 사용자 정보 ────────────────────────────────────────────
 
 
-class Cost(BaseModel):
+class Cost(InputModel):
     """사용자 쪽 금액 하나 (월, 원). 기본 신뢰도는 '사용자 입력'.
 
     월세 실거래가 추정값처럼 코드가 추정한 값이면 status='estimated'와 출처를 넣는다.
@@ -62,7 +75,7 @@ class Cost(BaseModel):
     source: str | None = Field(default=None, description='값의 출처 (예: 국토부 실거래가 중앙값)')
 
 
-class CurrentJob(BaseModel):
+class CurrentJob(InputModel):
     """지금 다니는 회사 (손익분기 연봉의 '현상 유지' 기준). 지금 집에서 다닌다고 본다."""
 
     annual_salary_krw: int = Field(ge=0, le=MAX_KRW, description='지금 세전 고정연봉(원)')
@@ -74,14 +87,14 @@ class CurrentJob(BaseModel):
     source: str | None = Field(default=None, description='예: 2026년 10월 급여명세서')
 
 
-class FixedExpense(BaseModel):
+class FixedExpense(InputModel):
     """기타 고정비 한 줄 (학자금 상환, 통신비 등)."""
 
     name: str = Field(min_length=1)
     monthly_krw: int = Field(ge=0, le=MAX_KRW)
 
 
-class PostingCosts(BaseModel):
+class PostingCosts(InputModel):
     """공고(회사 위치)마다 달라지는 비용. 모르면 비워 둔다(None)."""
 
     commute_transport: Cost | None = Field(
@@ -101,7 +114,7 @@ class PostingCosts(BaseModel):
     )
 
 
-class UserProfile(BaseModel):
+class UserProfile(InputModel):
     """계산에 필요한 사용자 정보. 공고에 없는 값은 모두 여기서 온다."""
 
     family: int = Field(default=1, ge=1, le=20, description='소득세용 공제대상가족 수 (본인 포함)')
@@ -159,7 +172,7 @@ class UserProfile(BaseModel):
 # ── 출력 ────────────────────────────────────────────────────────
 
 
-class Item(BaseModel):
+class Item(OutputModel):
     """결과의 값 하나와 그 출처·신뢰도."""
 
     label: str
@@ -168,7 +181,7 @@ class Item(BaseModel):
     source: str | None = None
 
 
-class Scenario(BaseModel):
+class Scenario(OutputModel):
     case: Case
     label: str
     applicable: bool = Field(default=True, description='False면 해당 없는 경우 (예: 통근 불가)')
@@ -179,7 +192,7 @@ class Scenario(BaseModel):
     missing: list[str] = Field(default_factory=list, description='계산에 필요한데 없는 값')
 
 
-class PostingResult(BaseModel):
+class PostingResult(OutputModel):
     posting_id: str
     company: str | None
     net_income: Item = Field(description='세후 월급 (실수령액)')

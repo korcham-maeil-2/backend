@@ -270,8 +270,8 @@ def test_graph_end_to_end_each_posting(pid):
     profile = POSTING_USER[pid]()
     # 그래프 안에서 공고 ID는 posting-1이라 이 공고의 비용을 그 ID로 옮긴다
     profile['postings'] = {'posting-1': profile['postings'][pid]}
-    graph.invoke({'messages': [scenario_text(pid)], 'user_profile': profile}, config)
-    state = graph.invoke(Command(resume={'approved': True}), config)
+    graph.invoke({'messages': [scenario_text(pid)]}, config)
+    state = graph.invoke(Command(resume={'approved': True, 'profile': profile}), config)
 
     result = state['result']
     assert result['errors'] == []

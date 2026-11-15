@@ -57,7 +57,15 @@ def make_normalize(extract: Extractor) -> Callable[[GraphState], dict[str, Any]]
         plain = '\n'.join(m for m in messages if m not in image_texts) if image_texts else None
         rows = build_rows(extract(text), text, plain)
         # 체크포인터(SQLite)에 저장되도록 평범한 dict로 바꿔 담는다.
-        return {'table': [r.model_dump(mode='json') for r in rows], 'table_confirmed': False}
+        # 표를 새로 만들면 공고 ID(posting-1 …)가 다른 회사를 가리킬 수 있으므로,
+        # 이전 표 기준의 사용자 정보·계산 결과·리포트는 지운다 (확인할 때 다시 받는다).
+        return {
+            'table': [r.model_dump(mode='json') for r in rows],
+            'table_confirmed': False,
+            'user_profile': None,
+            'result': None,
+            'report': None,
+        }
 
     return normalize
 
@@ -74,13 +82,18 @@ def confirm_table(state: GraphState) -> dict[str, Any]:
          사용자의 답(answer)을 돌려준다. 그 답으로 아래 코드가 이어서 실행된다.
     멈춘 상태는 체크포인터(SQLite)에 저장되므로, 서버를 껐다 켜도 이어서 진행할 수 있다.
 
-    사용자의 답 모양: {"approved": True, "table": [...]}  (table은 고쳤을 때만 온다)
+    사용자의 답 모양: {"approved": True, "table": [...], "profile": {...}}
+      table은 고쳤을 때만, profile(사용자 정보)은 입력했을 때만 온다.
     """
     answer = interrupt({'type': CONFIRM_TABLE, 'table': state.get('table', [])})
 
     # 사용자가 표를 고쳐서 보냈으면 그 표를, 아니면 원래 표를 쓴다.
     table = answer.get('table') or state.get('table', [])
-    return {'table': table, 'table_confirmed': bool(answer.get('approved', True))}
+    update = {'table': table, 'table_confirmed': bool(answer.get('approved', True))}
+    # 사용자 정보는 보냈을 때만 바꾼다 (안 보내면 이미 있던 값을 그대로 둔다)
+    if answer.get('profile') is not None:
+        update['user_profile'] = answer['profile']
+    return update
 
 
 def calculate(state: GraphState) -> dict[str, Any]:

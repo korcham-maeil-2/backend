@@ -29,7 +29,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from backend.calc import rates
 from backend.calc.payroll import monthly_net
@@ -37,6 +37,7 @@ from backend.calc.remaining import (
     CASE_LABELS,
     MIN_MONTHLY_BASE,
     Case,
+    OutputModel,
     PostingResult,
     Scenario,
     UserProfile,
@@ -56,7 +57,7 @@ _MIN_WAGE_STEP = -(-rates.MINIMUM_WAGE_ANNUAL // STEP_KRW)
 BaselineKind = Literal['target', 'posting', 'current_job']
 
 
-class Baseline(BaseModel):
+class Baseline(OutputModel):
     """비교 기준: 이만큼은 남아야 한다."""
 
     kind: BaselineKind = Field(
@@ -69,7 +70,7 @@ class Baseline(BaseModel):
     case: Case | None = None
 
 
-class BreakEvenCase(BaseModel):
+class BreakEvenCase(OutputModel):
     case: Case
     label: str
     annual_salary_krw: int | None = Field(
@@ -90,7 +91,7 @@ class BreakEvenCase(BaseModel):
     notes: list[str] = Field(default_factory=list, description='화면에 함께 보여 줄 안내')
 
 
-class BreakEven(BaseModel):
+class BreakEven(OutputModel):
     posting_id: str
     company: str | None
     baseline: Baseline
