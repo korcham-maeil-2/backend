@@ -108,6 +108,19 @@ class OtherAllowance(BaseModel):
     monthly_krw: MoneyCell
 
 
+class Question(BaseModel):
+    """물어볼 것 하나. 화면이 문장을 보고 칸을 추측하지 않게, 어느 칸 질문인지 함께 준다."""
+
+    text: str = Field(description='화면에 보여 줄 문장')
+    fields: list[str] = Field(
+        default_factory=list,
+        description=(
+            '이 질문이 가리키는 칸 이름 (예: annual_salary_krw, location, '
+            'other_allowances.0). 비어 있으면 칸이 없는 질문 (예: 연장근로 시간)'
+        ),
+    )
+
+
 class ComparisonRow(BaseModel):
     """비교표 한 행 = 공고 1건."""
 
@@ -152,9 +165,13 @@ class ComparisonRow(BaseModel):
         default_factory=RateCell, description='수습 기간 급여 비율'
     )
     overtime: TextCell = Field(default_factory=TextCell, description='연장·야간근무 관련 메모')
-    questions_to_ask: list[str] = Field(
+    questions: list[Question] = Field(
         default_factory=list,
         description='계산에 필요한데 공고에 없어 사용자에게 물어볼 것 (코드가 빈칸을 보고 만든다)',
+    )
+    questions_to_ask: list[str] = Field(
+        default_factory=list,
+        description='questions의 문장만 (예전 모양, questions를 쓰세요)',
     )
 
 

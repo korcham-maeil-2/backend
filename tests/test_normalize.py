@@ -540,6 +540,8 @@ def test_location_edge_cases(sido, sigungu, quote, lawd_cd, status):
     assert row.location.value.lawd_cd == lawd_cd
     assert row.location.status == status
     assert (REGION_QUESTION in row.questions_to_ask) == (lawd_cd is None)
+    region = [q for q in row.questions if q.text == REGION_QUESTION]
+    assert all(q.fields == ['location'] for q in region)
 
 
 def test_questions_are_made_by_code():
@@ -556,6 +558,22 @@ def test_questions_are_made_by_code():
     assert row_for('across_gwangju').questions_to_ask == [
         '한 달 예상 연장근로 시간 (모르면 0시간으로 계산)'
     ]
+
+
+def test_questions_carry_their_fields():
+    """질문마다 가리키는 칸 이름을 함께 준다 → 화면이 문장을 보고 칸을 추측하지 않는다."""
+    fields = {q.text: q.fields for q in row_for('stay_ulsan').questions}
+    assert fields == {
+        '제시받은 연봉 (공고에 금액 없음)': ['annual_salary_krw'],
+        '수습 기간 급여 비율 (공고에 없음)': ['probation_pay_rate'],
+    }
+    # 칸이 없는 질문은 fields가 비어 있다
+    [overtime] = [q for q in row_for('across_gwangju').questions]
+    assert overtime.fields == []
+    # 예전 모양(문장만)은 그대로 같이 준다
+    for pid in ('stay_ulsan', 'down_naju', 'near_pangyo', 'across_gwangju', 'up_seoul'):
+        row = row_for(pid)
+        assert row.questions_to_ask == [q.text for q in row.questions]
 
 
 @pytest.mark.parametrize(
@@ -651,6 +669,8 @@ def test_estimated_allowance_is_listed_in_questions():
         other_allowances=[ExtractedAllowance(name='교육비', monthly_krw=1_000_000, quote=text)],
     )
     assert any('기타 수당(교육비)' in q for q in row.questions_to_ask)
+    [estimated] = [q for q in row.questions if q.text.startswith('원문과 맞는지')]
+    assert 'other_allowances.0' in estimated.fields
 
 
 def test_salary_copied_across_postings_is_estimated():
