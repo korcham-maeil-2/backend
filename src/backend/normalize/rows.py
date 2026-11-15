@@ -35,6 +35,7 @@ from backend.normalize.schema import (
     LocationCell,
     MoneyCell,
     OtherAllowance,
+    Question,
     RateCell,
     SalaryTypeCell,
     TextCell,
@@ -169,50 +170,61 @@ def _label(field: str) -> str:
     return ComparisonRow.model_fields[field].description or field
 
 
-def make_questions(row: ComparisonRow, region_ok: bool) -> list[str]:
-    """계산에 필요한데 비어 있는 칸을 보고 사용자에게 물을 것을 만든다.
+def make_questions(row: ComparisonRow, region_ok: bool) -> list[Question]:
+    """계산에 필요한데 비어 있는 칸을 보고 사용자에게 물을 것을 만든다 (가리키는 칸 이름과 함께).
 
     주거·통근처럼 사용자 사정(본가 통근인지 등)에 따라 달라지는 질문은 여기서 하지 않는다.
     그건 사용자 정보를 아는 뒤 단계가 맡는다.
     """
-    q: list[str] = []
+    q: list[Question] = []
+
+    def ask(text: str, *fields: str) -> None:
+        q.append(Question(text=text, fields=list(fields)))
+
     st = row.salary_type
+    salary_field = 'monthly_salary_krw' if st.value == 'monthly' else 'annual_salary_krw'
     if st.value is None:
-        q.append(
+        ask(
             f'제시받은 연봉 (공고 표기: {st.source_text})'
             if st.source_text
-            else '제시받은 연봉 (공고에 없음)'
+            else '제시받은 연봉 (공고에 없음)',
+            salary_field,
         )
     elif st.value == 'undisclosed':
-        q.append('제시받은 연봉 (공고에 금액 없음)')
+        ask('제시받은 연봉 (공고에 금액 없음)', salary_field)
     elif st.value == 'annual' and row.annual_salary_krw.value is None:
-        q.append('연봉 금액 (공고에서 금액을 읽지 못함)')
+        ask('연봉 금액 (공고에서 금액을 읽지 못함)', 'annual_salary_krw')
     elif st.value == 'monthly' and row.monthly_salary_krw.value is None:
-        q.append('월급 금액 (공고에서 금액을 읽지 못함)')
+        ask('월급 금액 (공고에서 금액을 읽지 못함)', 'monthly_salary_krw')
 
     if row.probation_months.value and row.probation_pay_rate.value is None:
-        q.append('수습 기간 급여 비율 (공고에 없음)')
+        ask('수습 기간 급여 비율 (공고에 없음)', 'probation_pay_rate')
     if row.meal_allowance_monthly_krw.value and row.meal_allowance_in_salary.value is None:
-        q.append('식대가 연봉에 포함되는지 (공고에 없음)')
+        ask('식대가 연봉에 포함되는지 (공고에 없음)', 'meal_allowance_in_salary')
     if row.housing_allowance_monthly_krw.value and row.housing_allowance_months.value is None:
-        q.append('주거지원비 지원 기간 (공고에 없음)')
+        ask('주거지원비 지원 기간 (공고에 없음)', 'housing_allowance_months')
     if row.overtime.value is not None:
-        q.append(OVERTIME_QUESTION)
+        ask(OVERTIME_QUESTION)  # 시간을 넣는 칸은 없다 (계산 단계에서 묻는다)
     if row.location.status == 'missing':
-        q.append(LOCATION_MISSING_QUESTION)  # 월세 추정에 근무지가 필요하다
+        ask(LOCATION_MISSING_QUESTION, 'location')  # 월세 추정에 근무지가 필요하다
     elif not region_ok:
-        q.append(REGION_QUESTION)
+        ask(REGION_QUESTION, 'location')
 
     estimated = [
-        _label(k)
+        (k, _label(k))
         for k in ComparisonRow.model_fields
         if getattr(getattr(row, k), 'status', None) == 'estimated' and k != 'location'
     ]
     estimated += [
-        f'기타 수당({a.name})' for a in row.other_allowances if a.monthly_krw.status == 'estimated'
+        (f'other_allowances.{i}', f'기타 수당({a.name})')
+        for i, a in enumerate(row.other_allowances)
+        if a.monthly_krw.status == 'estimated'
     ]
     if estimated:
-        q.append('원문과 맞는지 확인이 필요한 값: ' + ', '.join(estimated))
+        ask(
+            '원문과 맞는지 확인이 필요한 값: ' + ', '.join(label for _, label in estimated),
+            *(field for field, _ in estimated),
+        )
     return q
 
 
@@ -327,5 +339,6 @@ def build_rows(
     if plain_text is not None:
         _mark_from_image(rows, plain_text)
     for row, region_ok in built:
-        row.questions_to_ask = make_questions(row, region_ok)
+        row.questions = make_questions(row, region_ok)
+        row.questions_to_ask = [question.text for question in row.questions]
     return rows
