@@ -44,6 +44,7 @@ class ErrorCode(StrEnum):
     # 우리 서비스가 직접 내는 에러
     SESSION_NOT_FOUND = 'SESSION_NOT_FOUND'  # 404: 없는 세션 ID
     SESSION_NOT_AWAITING_CONFIRMATION = 'SESSION_NOT_AWAITING_CONFIRMATION'  # 409
+    SESSION_NOT_COMPLETED = 'SESSION_NOT_COMPLETED'  # 409: 계산이 끝나지 않은 세션
     NORMALIZE_FAILED = 'NORMALIZE_FAILED'  # 502: 공고 정리(Claude 호출) 실패
     # 파일 올리기 (backend/inputs). 422는 사용자가 파일을 바꾸면 해결된다.
     FILE_MISSING = 'FILE_MISSING'  # 422: 파일 없음

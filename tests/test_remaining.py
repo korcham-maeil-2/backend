@@ -153,7 +153,7 @@ def test_no_profile_keeps_net_income_but_no_remaining():
     assert r.net_income.value is not None
     commute = by_case(r)['commute']
     assert commute.monthly_remaining is None
-    assert set(commute.missing) == {'기타 고정비', '주거비 (지금 집)', '교통비 (통근)'}
+    assert set(commute.missing) == {'고정비', '주거비 (지금 집)', '교통비 (통근)'}
 
 
 def test_missing_values_are_never_filled_with_zero():
@@ -161,7 +161,7 @@ def test_missing_values_are_never_filled_with_zero():
     profile = UserProfile.model_validate({'current_housing': {'value': 500_000}})
     commute = by_case(monthly_remaining(row_of('near_pangyo'), profile))['commute']
     assert commute.monthly_remaining is None
-    assert commute.missing == ['기타 고정비', '교통비 (통근)']
+    assert commute.missing == ['고정비', '교통비 (통근)']
     assert commute.status == 'missing'
 
 
@@ -295,10 +295,9 @@ def test_calculate_all_handles_empty_table():
 def test_graph_end_to_end_has_remaining_per_posting_and_case():
     graph = build_graph(InMemorySaver(), FakeExtractor())
     config = {'configurable': {'thread_id': 't1'}}
-    graph.invoke(
-        {'messages': [scenario_text('near_pangyo')], 'user_profile': user_a_profile()}, config
-    )
-    state = graph.invoke(Command(resume={'approved': True}), config)
+    graph.invoke({'messages': [scenario_text('near_pangyo')]}, config)
+    # 사용자 정보는 비교표 확인 때 함께 보낸다 (API의 /confirm과 같은 모양)
+    state = graph.invoke(Command(resume={'approved': True, 'profile': user_a_profile()}), config)
 
     result = state['result']
     assert result['has_user_profile'] is True
@@ -347,3 +346,18 @@ def test_estimated_meals_provided_lowers_confidence():
     row = row_of('near_pangyo')
     row.meals_provided.value, row.meals_provided.status = True, 'estimated'
     assert monthly_remaining(row, UserProfile()).net_income.status == 'estimated'
+
+
+def test_calculation_error_shows_fixed_friendly_text(monkeypatch):
+    """계산 중 예외가 나도 개발자용 예외 글(합쇼체·원 단위 숫자)은 화면으로 나가지 않는다."""
+    import backend.calc.remaining as remaining
+
+    def broken(*args, **kwargs):
+        raise ValueError('간이세액표에서 구간을 찾지 못했습니다: 123456789')
+
+    monkeypatch.setattr(remaining, 'monthly_net', broken)
+    r = monthly_remaining(row_of('near_pangyo'), None)
+    assert r.net_income.value is None
+    shown = [r.net_income.source, *r.notes]
+    assert not any('습니다' in text or '123456789' in text for text in shown)
+    assert '세후 월급을 계산하지 못했어요' in r.net_income.source

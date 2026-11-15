@@ -29,7 +29,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from backend.calc import rates
 from backend.calc.payroll import monthly_net
@@ -37,12 +37,15 @@ from backend.calc.remaining import (
     CASE_LABELS,
     MIN_MONTHLY_BASE,
     Case,
+    Item,
+    OutputModel,
     PostingResult,
     Scenario,
     UserProfile,
     monthly_remaining,
     weakest,
 )
+from backend.calc.text import won
 from backend.normalize.schema import ComparisonRow, FieldStatus
 
 STEP_KRW = 10_000  # 만 원 단위
@@ -56,7 +59,7 @@ _MIN_WAGE_STEP = -(-rates.MINIMUM_WAGE_ANNUAL // STEP_KRW)
 BaselineKind = Literal['target', 'posting', 'current_job']
 
 
-class Baseline(BaseModel):
+class Baseline(OutputModel):
     """비교 기준: 이만큼은 남아야 한다."""
 
     kind: BaselineKind = Field(
@@ -69,7 +72,7 @@ class Baseline(BaseModel):
     case: Case | None = None
 
 
-class BreakEvenCase(BaseModel):
+class BreakEvenCase(OutputModel):
     case: Case
     label: str
     annual_salary_krw: int | None = Field(
@@ -81,8 +84,26 @@ class BreakEvenCase(BaseModel):
     monthly_remaining: int | None = Field(
         default=None, description='그 연봉일 때의 월 잔여액 (기준 이상)'
     )
+    net_income_krw: int | None = Field(
+        default=None, description='그 연봉일 때의 세후 월급 (화면이 거꾸로 계산하지 않게)'
+    )
+    housing: Item | None = Field(
+        default=None, description='이 답에 쓴 주거비 (주거지원비가 끝난 뒤 기준)'
+    )
+    transport: Item | None = Field(default=None, description='이 답에 쓴 교통비')
     during_support_annual_salary_krw: int | None = Field(
         default=None, description='주거지원비를 받는 동안만 따진 손익분기 연봉 (지원이 있을 때만)'
+    )
+    support_excluded: bool = Field(
+        default=False,
+        description='주거지원비를 빼고 계산했는지 (지원이 끝난 뒤 기준). 화면이 주거비 옆에 알린다',
+    )
+    floor: Literal['minimum_wage'] | None = Field(
+        default=None,
+        description=(
+            'minimum_wage=계산한 연봉이 최저임금보다 낮아 최저임금 연봉으로 올림. '
+            '이때 monthly_remaining은 기준보다 많다'
+        ),
     )
     status: FieldStatus = Field(description='기준과 연봉 외 값(비용·수당 등) 중 가장 약한 신뢰도')
     reason: str | None = Field(default=None, description='못 구한 이유')
@@ -90,7 +111,7 @@ class BreakEvenCase(BaseModel):
     notes: list[str] = Field(default_factory=list, description='화면에 함께 보여 줄 안내')
 
 
-class BreakEven(BaseModel):
+class BreakEven(OutputModel):
     posting_id: str
     company: str | None
     baseline: Baseline
@@ -98,13 +119,6 @@ class BreakEven(BaseModel):
 
 
 # ── 지원 기간이 끝난 뒤 (장기) ───────────────────────────────────
-
-
-def _probation_notes(row: ComparisonRow) -> list[str]:
-    rate, months = row.probation_pay_rate.value, row.probation_months.value
-    if months and rate is not None and rate < 1:
-        return [f'수습 {months}개월 동안은 급여의 {rate:.0%}만 받아 그동안은 덜 남습니다.']
-    return []
 
 
 def long_term(row: ComparisonRow) -> tuple[ComparisonRow, list[str]]:
@@ -120,8 +134,8 @@ def long_term(row: ComparisonRow) -> tuple[ComparisonRow, list[str]]:
         return row, notes
     copy = row.model_copy(deep=True)
     copy.housing_allowance_monthly_krw.value = None
-    period = f'{months}개월 뒤 끝나므로' if months else '지원 기간을 몰라'
-    notes.append(f'주거지원비 월 {aid:,}원은 {period} 지원이 끝난 뒤 기준으로 계산했습니다.')
+    period = f'{months}개월 뒤 끝나므로' if months else '지원 기간을 몰라서'
+    notes.append(f'주거지원비 월 {won(aid)}은 {period} 지원이 끝난 뒤를 기준으로 계산했어요.')
     return copy, notes
 
 
@@ -157,7 +171,7 @@ def current_job_baseline(profile: UserProfile) -> tuple[Baseline | None, list[st
     if profile.current_housing is None:
         missing.append('지금 집 주거비')
     if profile.fixed_expenses is None:
-        missing.append('기타 고정비')
+        missing.append('고정비')
     if missing:
         return None, missing
 
@@ -185,7 +199,7 @@ def pick_baseline(
     if profile.target_monthly_remaining is not None:
         baseline = Baseline(
             kind='target',
-            label='목표 월 잔여액',
+            label='목표 금액',
             monthly_remaining=profile.target_monthly_remaining,
             status='user_input',
         )
@@ -211,19 +225,21 @@ def pick_baseline(
             )
             if x
         )
-        notes.append(f'고른 기준({what})의 월 잔여액이 없어 가장 많이 남는 경우와 비교합니다.')
+        notes.append(
+            f'고른 기준({what})은 남는 돈을 알 수 없어서 가장 많이 남는 경우와 비교했어요.'
+        )
 
     current, current_missing = current_job_baseline(profile)
     if current_missing:
         notes.append(
-            '지금 회사 정보 중 ' + ', '.join(current_missing) + ' 값이 없어 '
-            '"지금 회사 그대로" 기준은 쓰지 못했습니다.'
+            '지금 회사 정보 중 ' + ', '.join(current_missing) + ' 값이 없어서 '
+            '"지금 회사 그대로" 기준은 쓰지 못했어요.'
         )
     candidates = postings + ([current] if current else [])
     if not candidates:
         if not current_missing:
             notes.append(
-                '비교할 기준이 없습니다. 지금 연봉이나 매달 남아야 하는 목표 금액을 알려 주세요.'
+                '비교할 기준이 없어요. 지금 연봉이나 매달 남아야 하는 목표 금액을 알려 주세요.'
             )
         return None, notes
     return max(candidates, key=lambda b: b.monthly_remaining), notes
@@ -315,18 +331,20 @@ def _search(
             status=status,
             reason=f'연봉 {MAX_ANNUAL_KRW // 100_000_000}억 원 근처까지도 기준만큼 남지 않음',
         )
-    notes = []
+    floor = None
     if step < _MIN_WAGE_STEP:
         # 그 이상 어디서나 충분하므로 최저임금 연봉에서도 충분하다
-        step = _MIN_WAGE_STEP
-        notes.append('최저임금 연봉 이상이면 기준보다 많이 남습니다.')
-    _, found = _scenario_at(row, profile, step, case)
+        step, floor = _MIN_WAGE_STEP, 'minimum_wage'
+    found_result, found = _scenario_at(row, profile, step, case)
     return BreakEvenCase(
         **common,
         annual_salary_krw=step * STEP_KRW,
         monthly_remaining=found.monthly_remaining,
+        net_income_krw=found_result.net_income.value,
+        housing=found.housing,
+        transport=found.transport,
         status=status,
-        notes=notes,
+        floor=floor,
     )
 
 
@@ -339,9 +357,13 @@ def break_even(row: ComparisonRow, profile: UserProfile, baseline: Baseline) -> 
         if c.reason == '해당 없는 경우':
             cases.append(c)
             continue
-        notes = _probation_notes(row)
+        # 수습·연장근로 같은 공고 안내는 공고 결과(PostingResult.notes)에 이미 있다.
+        # 여기에는 손익분기 연봉에만 해당하는 안내(주거지원비 기간)만 단다.
+        # 최저임금으로 올린 경우는 floor 칸으로 알린다 (화면이 문장을 맞춰 쓴다).
+        notes: list[str] = []
         if case == 'move' and long_row is not row:  # 주거지원비는 이사 경우에만 들어간다
             notes += support_notes
+            c.support_excluded = True
             if c.annual_salary_krw is not None:
                 during = _search(row, profile, baseline, case).annual_salary_krw
                 if during != c.annual_salary_krw:

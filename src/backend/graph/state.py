@@ -41,10 +41,10 @@ class GraphState(TypedDict, total=False):
 
     # 사용자 정보 (지금 집 주거비, 공고별 통근·이사 비용, 고정비 등).
     # 모양은 backend/calc/remaining.py의 UserProfile. 없으면 잔여액은 null로 계산된다.
-    user_profile: dict[str, Any]
+    user_profile: dict[str, Any] | None
 
     # 계산 결과 (공고별·경우별 월 잔여액). calculate 노드가 채운다.
-    result: dict[str, Any]
+    result: dict[str, Any] | None
 
     # 최종 리포트 문장. write_report 노드가 채운다.
-    report: str
+    report: str | None

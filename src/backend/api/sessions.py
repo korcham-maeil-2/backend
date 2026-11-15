@@ -10,6 +10,9 @@
   2) (프론트가 비교표를 보여 주고 사용자가 확인)
   3) POST /sessions/{id}/confirm    {"approved": true}
        → 멈춘 곳부터 이어서 끝까지 실행 → status: "completed", 결과·리포트 반환
+  4) (결과 화면에서 월세 등을 바꾸면)
+     POST /sessions/{id}/recalculate   {"profile": {...}, "table": [...] (고쳤을 때만)}
+       → 공고를 다시 읽지 않고(Claude 호출 없음) 계산·리포트만 다시 → 새 결과 반환
   언제든 GET /sessions/{id} 로 현재 상태를 다시 볼 수 있다.
 
 [async / await]
@@ -18,21 +21,31 @@ async def 함수 안의 await는 "DB나 그래프 작업이 끝날 때까지 기
 """
 
 import asyncio
+import logging
 import uuid
+import weakref
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Annotated
 
 from fastapi import APIRouter, File, Form, Request, UploadFile, status
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
+from pydantic import ValidationError
 
 from backend.api.errors import AppError, ErrorCode, error_responses
 from backend.api.schemas import (
+    CalculationResult,
     ConfirmRequest,
     InputSummary,
     MessageRequest,
     PendingQuestion,
+    RecalculateRequest,
     SessionResponse,
 )
+from backend.calc.remaining import UserProfile
+from backend.calc.summary import calculate_all
+from backend.graph import nodes
 from backend.inputs.errors import FileInputError, ReadError
 from backend.inputs.limits import MAX_MESSAGE_CHARS
 from backend.inputs.read import (
@@ -51,6 +64,21 @@ from backend.normalize import NormalizeError
 # 422(입력 형식 오류)·500(서버 오류) 때 공통 에러 모양을 돌려준다고 /docs와 프론트 타입에 알린다.
 # 주소별 에러(404·409)는 각 함수에 적는다.
 router = APIRouter(prefix='/sessions', tags=['sessions'], responses=error_responses(422, 500))
+logger = logging.getLogger(__name__)
+
+# 세션마다 자물쇠 하나. 같은 세션에 확인·메시지·사용자 정보 변경이 동시에 오면 차례로 처리한다
+# (먼저 온 요청이 끝나야 다음 요청이 상태를 읽는다 → 늦게 보낸 입력이 사라지지 않는다).
+# 서버가 한 프로세스라 이걸로 충분하다. 쓰는 요청이 없으면 자물쇠는 저절로 정리된다(weakref).
+_session_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
+
+
+@asynccontextmanager
+async def _locked(session_id: str) -> AsyncIterator[None]:
+    lock = _session_locks.get(session_id)
+    if lock is None:
+        lock = _session_locks[session_id] = asyncio.Lock()
+    async with lock:
+        yield
 
 
 def _graph(request: Request) -> CompiledStateGraph:
@@ -104,9 +132,34 @@ async def _snapshot(graph: CompiledStateGraph, session_id: str) -> SessionRespon
         table_confirmed=values.get('table_confirmed', False),
         inputs=values.get('inputs', []),
         input_text='\n'.join(values.get('messages', [])),
-        result=values.get('result'),
+        profile=_profile(values.get('user_profile')),
+        result=_result(values.get('result')),
         report=values.get('report'),
     )
+
+
+def _profile(raw: dict | None) -> UserProfile | None:
+    if raw is None:
+        return None
+    try:
+        return UserProfile.model_validate(raw)
+    except ValidationError:
+        logger.warning('저장된 사용자 정보가 지금 모양과 맞지 않아 응답에서 뺐습니다')
+        return None
+
+
+def _result(raw: dict | None) -> CalculationResult | None:
+    """저장된 계산 결과를 응답 모양으로. 예전 모양으로 저장된 세션이면 결과 없음으로 본다.
+
+    (계산 결과 모양이 바뀌기 전에 끝난 세션을 조회해도 500이 나지 않게)
+    """
+    if raw is None:
+        return None
+    try:
+        return CalculationResult.model_validate(raw)
+    except ValidationError:
+        logger.warning('저장된 계산 결과가 지금 모양과 맞지 않아 응답에서 뺐습니다')
+        return None
 
 
 # @router.post('') → POST /sessions 요청을 이 함수가 처리한다.
@@ -131,7 +184,8 @@ async def _run_with_message(graph: CompiledStateGraph, message: str, session_id:
     await _run(graph, {'messages': [message]}, session_id)
 
 
-async def _run(graph: CompiledStateGraph, values: dict, session_id: str) -> None:
+async def _run(graph: CompiledStateGraph, values: dict | None, session_id: str) -> None:
+    """그래프를 실행한다. values=None이면 멈춘(실패한) 곳부터 이어서 실행한다."""
     try:
         await graph.ainvoke(values, _config(session_id))
     except NormalizeError as e:
@@ -204,11 +258,22 @@ async def send_message(session_id: str, body: MessageRequest, request: Request) 
     {session_id}처럼 중괄호로 쓴 주소 부분은 같은 이름의 함수 인자로 들어온다.
     """
     graph = _graph(request)
-    await _snapshot(graph, session_id)  # 없는 세션이면 여기서 404
-    # 새 입력으로 다시 실행한다. messages 칸은 '뒤에 붙이기'라서(state.py 참고)
-    # 이전 메시지 + 새 메시지가 합쳐진 채로 처음 노드부터 다시 돈다.
-    await _run_with_message(graph, body.message, session_id)
-    return await _snapshot(graph, session_id)
+    async with _locked(session_id):
+        current = await _snapshot(graph, session_id)  # 없는 세션이면 여기서 404
+        messages = (await graph.aget_state(_config(session_id))).values.get('messages', [])
+        if current.status == 'running' and body.message in messages:
+            # 공고를 정리하다 실패해(502) 실행 중에 멈춘 세션에, 이미 들어간 메시지를 다시 보냈다
+            # (마지막 것이 아니어도: A 실패 → B 실패 → A 다시).
+            # 다시 붙이지 않고 실패한 곳부터 이어서 실행한다.
+            # 세션마다 자물쇠가 있어서, 다른 요청이 실행 중인 상태를 여기서 볼 일은 없다
+            # (서버가 한 프로세스일 때 — Dockerfile의 uvicorn은 워커 하나).
+            await _run(graph, None, session_id)
+        else:
+            # 새 입력으로 다시 실행한다. messages 칸은 '뒤에 붙이기'라서(state.py 참고)
+            # 이전 메시지 + 새 메시지가 합쳐진 채로 처음 노드부터 다시 돈다.
+            # (실패해 멈춘 세션이어도 새 메시지로 처음부터 다시 돌면 풀린다)
+            await _run_with_message(graph, body.message, session_id)
+        return await _snapshot(graph, session_id)
 
 
 @router.post('/{session_id}/confirm', responses=error_responses(404, 409))
@@ -218,19 +283,57 @@ async def confirm_table(session_id: str, body: ConfirmRequest, request: Request)
     확인을 기다리는 세션이 아니면 409.
     """
     graph = _graph(request)
-    current = await _snapshot(graph, session_id)
-    if current.status != 'awaiting_confirmation':
-        # 409 Conflict: 지금 상태와 맞지 않는 요청 (예: 이미 끝난 세션에 또 확인을 보냄)
-        raise AppError(
-            status.HTTP_409_CONFLICT,
-            ErrorCode.SESSION_NOT_AWAITING_CONFIRMATION,
-            '비교표 확인을 기다리는 세션이 아닙니다.',
-        )
-    # Command(resume=값): "멈춘 곳에서 이 값을 답으로 넣고 이어서 실행해"라는 명령.
-    # 이 값이 nodes.confirm_table 안의 interrupt()가 돌려주는 answer가 된다.
-    # body.model_dump(): Pydantic 모델 → 평범한 dict ({'approved': True, 'table': None})
-    await graph.ainvoke(Command(resume=body.model_dump()), _config(session_id))
-    return await _snapshot(graph, session_id)
+    async with _locked(session_id):
+        current = await _snapshot(graph, session_id)
+        if current.status != 'awaiting_confirmation':
+            # 409 Conflict: 지금 상태와 맞지 않는 요청 (예: 이미 끝난 세션에 또 확인을 보냄)
+            raise AppError(
+                status.HTTP_409_CONFLICT,
+                ErrorCode.SESSION_NOT_AWAITING_CONFIRMATION,
+                '비교표 확인을 기다리는 세션이 아닙니다.',
+            )
+        # Command(resume=값): "멈춘 곳에서 이 값을 답으로 넣고 이어서 실행해"라는 명령.
+        # 이 값이 nodes.confirm_table 안의 interrupt()가 돌려주는 answer가 된다.
+        # body.model_dump(mode='json'): Pydantic 모델 → 평범한 dict
+        #   ({'approved': True, 'table': None, 'profile': {...} 또는 None})
+        #   mode='json'은 체크포인터(SQLite)에 그대로 저장되는 값(문자열·숫자·리스트)만 남긴다.
+        await graph.ainvoke(Command(resume=body.model_dump(mode='json')), _config(session_id))
+        return await _snapshot(graph, session_id)
+
+
+@router.post('/{session_id}/recalculate', responses=error_responses(404, 409))
+async def recalculate(
+    session_id: str, body: RecalculateRequest, request: Request
+) -> SessionResponse:
+    """결과 화면에서 생활비나 비교표를 고쳤을 때, 계산·리포트만 다시 한다.
+
+    비교표 확인을 마친(completed) 세션에서만 된다. 확인 전이면 /confirm에 함께 보낸다 → 409.
+    사용자 정보는 보낸 값으로 통째로 바꾸고, 비교표는 보냈을 때만 바꾼다.
+    공고 정리(Claude 호출)는 다시 하지 않는다 → 비용 0원, 바로 끝난다.
+    """
+    graph = _graph(request)
+    config = _config(session_id)
+    async with _locked(session_id):
+        current = await _snapshot(graph, session_id)
+        if current.status != 'completed':
+            raise AppError(
+                status.HTTP_409_CONFLICT,
+                ErrorCode.SESSION_NOT_COMPLETED,
+                '계산이 끝난 세션이 아닙니다. 비교표 확인 때 사용자 정보를 함께 보내 주세요.',
+            )
+        # 새 결과를 먼저 다 계산한 뒤, 한 번에 저장한다 (중간에 실패하면 아무것도 바뀌지 않는다).
+        # as_node='write_report': "마지막 노드가 돌려준 것처럼" 저장 → 세션은 계속 completed.
+        # (그래프를 calculate부터 다시 돌리면, 중간에 실패했을 때 세션이 '실행 중'에 멈춘다)
+        # TODO(#19): write_report가 LLM을 부르게 되면, 숫자를 바꿀 때마다 리포트를 다시 쓸지 정한다.
+        values = (await graph.aget_state(config)).values
+        data = body.model_dump(mode='json')  # 체크포인터(SQLite)에 저장되는 평범한 값으로
+        profile = data['profile']
+        table = data['table'] if body.table is not None else values.get('table', [])
+        result = calculate_all(table, profile)
+        update = {'table': table, 'user_profile': profile, 'result': result}
+        report = nodes.write_report({**values, **update})
+        await graph.aupdate_state(config, {**update, **report}, as_node='write_report')
+        return await _snapshot(graph, session_id)
 
 
 @router.get('/{session_id}', responses=error_responses(404))
