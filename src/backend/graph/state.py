@@ -39,7 +39,11 @@ class GraphState(TypedDict, total=False):
     # 사용자가 비교표를 확인했는지 여부.
     table_confirmed: bool
 
-    # 계산 결과 (월 잔여액 등). calculate 노드가 채운다.
+    # 사용자 정보 (지금 집 주거비, 공고별 통근·이사 비용, 고정비 등).
+    # 모양은 backend/calc/remaining.py의 UserProfile. 없으면 잔여액은 null로 계산된다.
+    user_profile: dict[str, Any]
+
+    # 계산 결과 (공고별·경우별 월 잔여액). calculate 노드가 채운다.
     result: dict[str, Any]
 
     # 최종 리포트 문장. write_report 노드가 채운다.

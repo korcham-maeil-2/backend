@@ -54,7 +54,12 @@ def test_start_stops_at_confirm_table_then_confirm_completes(tmp_path):
         assert done['status'] == 'completed'
         assert done['pending'] is None
         assert done['table_confirmed'] is True
-        assert done['result'] == {'rows': 1, 'monthly_remaining': None}
+        # 사용자 정보가 없으면 세후 월급까지만 계산하고 잔여액은 null (#8)
+        result = done['result']
+        assert result['rows'] == 1
+        assert result['has_user_profile'] is False
+        assert result['postings'][0]['net_income']['value'] is not None
+        assert [s['monthly_remaining'] for s in result['postings'][0]['scenarios']] == [None, None]
         assert done['report']
 
 
