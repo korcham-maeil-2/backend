@@ -180,7 +180,13 @@ class HttpRentFetcher:
 
 
 class RentCache:
-    """(유형, 시군구, 달) → 거래 목록. 최근 FRESH_MONTHS 달은 하루가 지나면 다시 받는다."""
+    """시군구 하나의 (유형, 달) → 거래 목록. 최근 FRESH_MONTHS 달은 하루가 지나면 다시 받는다.
+
+    체크포인터(AsyncSqliteSaver)와 같은 파일을 쓰므로, 이 동기 함수들은 반드시 이벤트 루프 밖
+    (asyncio.to_thread)에서 부른다. 루프 위에서 부르면, 체크포인터가 쓰기 잠금을 잡고 루프가
+    돌기를 기다리는 동안 이쪽은 잠금이 풀리기를 기다려 서로 멈춘다 (database is locked).
+    지역 하나를 한 번에 읽고(SELECT 1번) 한 번에 쓴다(executemany 1번) → 잠금이 겹칠 틈을 줄인다.
+    """
 
     def __init__(self, db_path: str) -> None:
         self._path = db_path
@@ -192,33 +198,36 @@ class RentCache:
             )
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self._path, timeout=10)
+        return sqlite3.connect(self._path, timeout=5)
 
-    def get(self, kind: Kind, lawd_cd: str, ymd: str, fresh_since: str) -> list[Deal] | None:
+    def read(
+        self, lawd_cd: str, months: list[str], fresh_since: str
+    ) -> dict[tuple[Kind, str], list[Deal]]:
+        """이 지역의 쓸 수 있는 캐시 전부. 최근 달인데 하루가 지난 것은 빼서 다시 받게 한다."""
+        stale_before = datetime.now(UTC) - timedelta(days=1)
         with self._connect() as db:
-            row = db.execute(
-                'SELECT fetched_at, deals FROM rent_cache WHERE kind=? AND lawd_cd=? AND ymd=?',
-                (kind, lawd_cd, ymd),
-            ).fetchone()
-        if row is None:
-            return None
-        fetched_at, raw = row
-        recent = ymd >= fresh_since
-        if recent and datetime.fromisoformat(fetched_at) < datetime.now(UTC) - timedelta(days=1):
-            return None
-        return [Deal(**d) for d in json.loads(raw)]
+            rows = db.execute(
+                'SELECT kind, ymd, fetched_at, deals FROM rent_cache WHERE lawd_cd=?',
+                (lawd_cd,),
+            ).fetchall()
+        out: dict[tuple[Kind, str], list[Deal]] = {}
+        for kind, ymd, fetched_at, raw in rows:
+            if ymd not in months:
+                continue
+            if ymd >= fresh_since and datetime.fromisoformat(fetched_at) < stale_before:
+                continue
+            out[(kind, ymd)] = [Deal(**d) for d in json.loads(raw)]
+        return out
 
-    def put(self, kind: Kind, lawd_cd: str, ymd: str, deals: list[Deal]) -> None:
+    def write(self, lawd_cd: str, found: dict[tuple[Kind, str], list[Deal]]) -> None:
+        now = datetime.now(UTC).isoformat()
         with self._connect() as db:
-            db.execute(
+            db.executemany(
                 'INSERT OR REPLACE INTO rent_cache VALUES (?, ?, ?, ?, ?)',
-                (
-                    kind,
-                    lawd_cd,
-                    ymd,
-                    datetime.now(UTC).isoformat(),
-                    json.dumps([asdict(d) for d in deals]),
-                ),
+                [
+                    (kind, lawd_cd, ymd, now, json.dumps([asdict(d) for d in deals]))
+                    for (kind, ymd), deals in found.items()
+                ],
             )
 
 
@@ -237,7 +246,13 @@ class RentEstimate(BaseModel):
     sample_size: int = Field(default=0, description='중앙값을 낸 거래 수')
     period: str = Field(description='조회한 계약 기간 (예: 2026년 5~10월)')
     source: str = Field(description='출처 문장 (데이터명·기간·조건·표본 수)')
-    status: Literal['estimated', 'missing'] = 'estimated'
+    status: Literal['estimated', 'missing', 'unavailable'] = Field(
+        default='estimated',
+        description=(
+            'estimated=시세를 구함 / missing=조건에 맞는 거래가 없음 / '
+            'unavailable=불러오지 못함(잠시 후 다시 조회)'
+        ),
+    )
     reason: str | None = Field(default=None, description='못 구한 이유')
 
 
@@ -330,22 +345,16 @@ class RentEstimator:
     async def estimate(self, lawd_cd: str) -> RentEstimate:
         months = recent_months(self._today())
         fresh_since = months[-FRESH_MONTHS]
+        cached = await self._read_cache(lawd_cd, months, fresh_since)
         sem = asyncio.Semaphore(CONCURRENCY)
 
-        async def one(kind: Kind, ymd: str) -> list[Deal]:
-            if self._cache is not None:
-                hit = self._cache.get(kind, lawd_cd, ymd, fresh_since)
-                if hit is not None:
-                    return hit
+        async def fetch(kind: Kind, ymd: str) -> list[Deal]:
             async with sem:
-                deals = await self._fetch(kind, lawd_cd, ymd)
-            if self._cache is not None:
-                self._cache.put(kind, lawd_cd, ymd, deals)
-            return deals
+                return await self._fetch(kind, lawd_cd, ymd)
 
-        tasks = [one(kind, ymd) for kind in KIND_LABELS for ymd in months]
+        todo = [(kind, ymd) for kind in KIND_LABELS for ymd in months if (kind, ymd) not in cached]
         try:
-            results = await asyncio.gather(*tasks)
+            fetched = await asyncio.gather(*(fetch(kind, ymd) for kind, ymd in todo))
         except RentApiError as e:
             logger.warning('월세 실거래가 조회 실패 (%s): %s', lawd_cd, e)
             return RentEstimate(
@@ -354,12 +363,46 @@ class RentEstimator:
                 monthly_rent_krw=None,
                 period=period_text(months),
                 source=SOURCE_NAME,
-                status='missing',
-                reason='실거래가를 불러오지 못했어요',
+                status='unavailable',
+                reason='실거래가를 불러오지 못했어요. 잠시 후 다시 계산하면 다시 불러와요',
             )
-        return summarize(lawd_cd, months, [d for deals in results for d in deals])
+        found = dict(zip(todo, fetched, strict=True))
+        if found:
+            await self._write_cache(lawd_cd, found)
+        deals = [d for got in (*cached.values(), *found.values()) for d in got]
+        return summarize(lawd_cd, months, deals)
+
+    async def _read_cache(
+        self, lawd_cd: str, months: list[str], fresh_since: str
+    ) -> dict[tuple[Kind, str], list[Deal]]:
+        """캐시를 읽는다 (루프 밖 스레드에서). 캐시가 고장 나면 캐시 없이 조회한다."""
+        if self._cache is None:
+            return {}
+        try:
+            return await asyncio.to_thread(self._cache.read, lawd_cd, months, fresh_since)
+        except sqlite3.Error:
+            logger.warning('월세 캐시를 읽지 못해 새로 조회합니다 (%s)', lawd_cd, exc_info=True)
+            return {}
+
+    async def _write_cache(self, lawd_cd: str, found: dict[tuple[Kind, str], list[Deal]]) -> None:
+        """캐시에 쓴다 (루프 밖 스레드에서). 실패해도 계산은 계속한다 (다음에 다시 받을 뿐)."""
+        if self._cache is None:
+            return
+        try:
+            await asyncio.to_thread(self._cache.write, lawd_cd, found)
+        except sqlite3.Error:
+            logger.warning('월세 캐시에 쓰지 못했습니다 (%s)', lawd_cd, exc_info=True)
 
     async def estimate_many(self, lawd_cds: Iterable[str]) -> dict[str, RentEstimate]:
-        codes = sorted(set(lawd_cds))
+        """여러 지역을 한꺼번에. 조회할 수 없는 코드(구를 골라야 하는 시 등)는 건너뛴다."""
+        codes = sorted({c for c in lawd_cds if rentable(c)})
         found = await asyncio.gather(*(self.estimate(c) for c in codes))
         return dict(zip(codes, found, strict=True))
+
+
+def rentable(lawd_cd: str) -> bool:
+    """실거래가를 조회할 수 있는 시군구 코드인지 (코드표에 있고, 구를 더 고를 필요가 없음).
+
+    예: 성남시 41130은 False (실거래가는 분당구 41135처럼 구 코드로만 나온다).
+    """
+    return any(r.lawd_cd == lawd_cd and r.selectable for r in load_regions())

@@ -346,7 +346,11 @@ async def _rents_for(request: Request, table: list[dict], saved: dict[str, dict]
     """비교표 근무지들의 월세 추정. 이미 구한 지역은 다시 묻지 않고, 근무지를 고쳐 새로 생긴
     지역만 조회한다 (조회기가 없으면 저장된 것만)."""
     codes = nodes.table_lawd_codes(table)
-    rents = {c: v for c, v in saved.items() if c in codes}
+    # 구한 시세('estimated')와 '거래 없음'('missing')만 다시 쓴다.
+    # 불러오지 못했던 지역('unavailable')은 다시 조회한다 (GET /rent와 결과가 어긋나지 않게).
+    rents = {
+        c: v for c, v in saved.items() if c in codes and v.get('status') in ('estimated', 'missing')
+    }
     estimator = getattr(request.app.state, 'rent_estimator', None)
     new_codes = codes - rents.keys()
     if estimator is not None and new_codes:

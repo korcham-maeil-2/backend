@@ -12,7 +12,7 @@ from fastapi import APIRouter, Request, status
 
 from backend.api.errors import AppError, ErrorCode, error_responses
 from backend.normalize.checks import load_regions
-from backend.public_data.rent import RentEstimate, period_text, recent_months
+from backend.public_data.rent import RentEstimate, period_text, recent_months, rentable
 
 router = APIRouter(prefix='/rent', tags=['rent'], responses=error_responses(422, 500))
 
@@ -24,8 +24,7 @@ async def get_rent(lawd_cd: str, request: Request) -> RentEstimate:
     코드표(data/lawd_codes.csv)에 없거나, 구를 더 골라야 하는 시(예: 성남시 41130)면 404.
     조회 기능이 꺼져 있으면(인증키 없음) status='missing'과 이유를 돌려준다.
     """
-    region = next((r for r in load_regions() if r.lawd_cd == lawd_cd), None)
-    if region is None or not region.selectable:
+    if not rentable(lawd_cd):
         raise AppError(
             status.HTTP_404_NOT_FOUND,
             ErrorCode.REGION_NOT_FOUND,
@@ -35,7 +34,7 @@ async def get_rent(lawd_cd: str, request: Request) -> RentEstimate:
     if estimator is None:
         return RentEstimate(
             lawd_cd=lawd_cd,
-            region=f'{region.sido} {region.sigungu}',
+            region=next(f'{r.sido} {r.sigungu}' for r in load_regions() if r.lawd_cd == lawd_cd),
             monthly_rent_krw=None,
             period=period_text(recent_months(date.today())),
             source='국토교통부 전월세 실거래가',

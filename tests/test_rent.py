@@ -63,6 +63,7 @@ class FakeFetcher:
         self.calls = 0
 
     async def __call__(self, kind, lawd_cd, ymd):
+        await asyncio.sleep(0)  # 실제 조회처럼 이벤트 루프에 차례를 넘긴다
         self.calls += 1
         if self.fail:
             raise RentApiError('오류 응답: SERVICE ERROR')
@@ -142,20 +143,40 @@ def test_estimator_caches_months(tmp_path):
 def test_cache_refreshes_recent_months_after_a_day(tmp_path):
     path = str(tmp_path / 'c.sqlite')
     cache = RentCache(path)
-    cache.put('OffiRent', NAJU, '202610', [deal(40)])
-    cache.put('OffiRent', NAJU, '202605', [deal(40)])
+    cache.write(NAJU, {('OffiRent', '202610'): [deal(40)], ('OffiRent', '202605'): [deal(40)]})
     with sqlite3.connect(path) as db:
         db.execute("UPDATE rent_cache SET fetched_at='2026-01-01T00:00:00+00:00'")
-    assert cache.get('OffiRent', NAJU, '202610', fresh_since='202609') is None  # 최근 달 → 다시
-    assert cache.get('OffiRent', NAJU, '202605', fresh_since='202609') == [deal(40)]  # 지난 달
+    got = cache.read(NAJU, MONTHS, fresh_since='202609')
+    assert ('OffiRent', '202610') not in got  # 최근 달 → 다시 받는다
+    assert got[('OffiRent', '202605')] == [deal(40)]  # 지난 달은 계속 쓴다
+
+
+def test_broken_cache_does_not_stop_estimate(tmp_path, monkeypatch):
+    """캐시를 읽지도 쓰지도 못해도(잠김 등) 조회해서 시세를 낸다."""
+
+    def locked(*args, **kwargs):
+        raise sqlite3.OperationalError('database is locked')
+
+    monkeypatch.setattr(RentCache, 'read', locked)
+    monkeypatch.setattr(RentCache, 'write', locked)
+    est = RentEstimator(FakeFetcher(), RentCache(str(tmp_path / 'c.sqlite')), today=lambda: TODAY)
+    assert asyncio.run(est.estimate(NAJU)).monthly_rent_krw == 450_000
+
+
+def test_estimate_many_skips_codes_that_need_a_district():
+    """성남시(41130)처럼 구를 골라야 하는 코드는 실거래가가 0건이라 조회하지 않는다."""
+    fetcher = FakeFetcher()
+    est = RentEstimator(fetcher, today=lambda: TODAY)
+    assert asyncio.run(est.estimate_many(['41130', '99999'])) == {}
+    assert fetcher.calls == 0
 
 
 def test_estimator_api_error_gives_missing_not_crash():
     est = RentEstimator(FakeFetcher(fail=True), today=lambda: TODAY)
     e = asyncio.run(est.estimate(NAJU))
-    assert e.status == 'missing'
+    assert e.status == 'unavailable'  # '거래 없음'(missing)과 구분 → 다시 계산할 때 재조회
     assert e.monthly_rent_krw is None
-    assert e.reason == '실거래가를 불러오지 못했어요'
+    assert e.reason
 
 
 # ── 계산에 반영 ──────────────────────────────────────────────────
@@ -246,6 +267,40 @@ def test_confirm_runs_get_rent_and_recalculate_reuses_it(tmp_path):
         assert again.status_code == 200
         assert fetcher.calls == calls  # 이미 구한 지역은 다시 묻지 않는다
         assert _move(again.json()['result'])['housing']['value'] == 250_000
+
+
+def test_cache_write_failure_still_confirms(tmp_path, monkeypatch):
+    """캐시에 못 써도 확인은 200 (세션이 '실행 중'에 갇히지 않는다)."""
+
+    def locked(*args, **kwargs):
+        raise sqlite3.OperationalError('database is locked')
+
+    monkeypatch.setattr(RentCache, 'write', locked)
+    profile = _naju_profile()
+    del profile['postings']['posting-1']['move_housing']
+    with _client(tmp_path, FakeFetcher()) as c:
+        sid = c.post('/sessions', json={'message': scenario_text('down_naju')}).json()['session_id']
+        done = c.post(f'/sessions/{sid}/confirm', json={'approved': True, 'profile': profile})
+        assert done.status_code == 200
+        assert done.json()['status'] == 'completed'
+        assert _move(done.json()['result'])['housing']['status'] == 'estimated'
+
+
+def test_recalculate_retries_regions_that_failed(tmp_path):
+    """확인 때 불러오지 못한 지역은 다시 계산할 때 다시 조회한다."""
+    fetcher = FakeFetcher(fail=True)
+    profile = _naju_profile()
+    del profile['postings']['posting-1']['move_housing']
+    with _client(tmp_path, fetcher) as c:
+        sid = c.post('/sessions', json={'message': scenario_text('down_naju')}).json()['session_id']
+        done = c.post(f'/sessions/{sid}/confirm', json={'approved': True, 'profile': profile})
+        assert done.json()['result']['rent_estimates'][0]['status'] == 'unavailable'
+        assert _move(done.json()['result'])['housing']['value'] is None
+
+        fetcher.fail = False
+        again = c.post(f'/sessions/{sid}/recalculate', json={'profile': profile}).json()
+        assert again['result']['rent_estimates'][0]['status'] == 'estimated'
+        assert _move(again['result'])['housing']['value'] == 450_000 - 200_000
 
 
 def test_rent_endpoint(tmp_path):
