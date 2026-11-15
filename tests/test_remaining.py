@@ -17,10 +17,10 @@ from langgraph.types import Command
 from backend.calc import monthly_net, monthly_net_from_annual
 from backend.calc.remaining import (
     UserProfile,
-    calculate_all,
     monthly_remaining,
     weakest,
 )
+from backend.calc.summary import calculate_all
 from backend.graph.builder import build_graph
 from backend.normalize import build_rows
 from backend.normalize.schema import ComparisonRow
