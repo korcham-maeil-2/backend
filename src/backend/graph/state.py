@@ -43,6 +43,10 @@ class GraphState(TypedDict, total=False):
     # 모양은 backend/calc/remaining.py의 UserProfile. 없으면 잔여액은 null로 계산된다.
     user_profile: dict[str, Any] | None
 
+    # 회사 지역(시군구 코드)별 원룸급 월세 추정. get_rent 노드가 채운다.
+    # 모양은 backend/public_data/rent.py의 RentEstimate (dict).
+    rent_estimates: dict[str, dict[str, Any]] | None
+
     # 계산 결과 (공고별·경우별 월 잔여액). calculate 노드가 채운다.
     result: dict[str, Any] | None
 

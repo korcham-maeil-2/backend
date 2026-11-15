@@ -329,11 +329,30 @@ async def recalculate(
         data = body.model_dump(mode='json')  # 체크포인터(SQLite)에 저장되는 평범한 값으로
         profile = data['profile']
         table = data['table'] if body.table is not None else values.get('table', [])
-        result = calculate_all(table, profile)
-        update = {'table': table, 'user_profile': profile, 'result': result}
+        rents = await _rents_for(request, table, values.get('rent_estimates') or {})
+        result = calculate_all(table, profile, rents)
+        update = {
+            'table': table,
+            'user_profile': profile,
+            'rent_estimates': rents,
+            'result': result,
+        }
         report = nodes.write_report({**values, **update})
         await graph.aupdate_state(config, {**update, **report}, as_node='write_report')
         return await _snapshot(graph, session_id)
+
+
+async def _rents_for(request: Request, table: list[dict], saved: dict[str, dict]) -> dict:
+    """비교표 근무지들의 월세 추정. 이미 구한 지역은 다시 묻지 않고, 근무지를 고쳐 새로 생긴
+    지역만 조회한다 (조회기가 없으면 저장된 것만)."""
+    codes = nodes.table_lawd_codes(table)
+    rents = {c: v for c, v in saved.items() if c in codes}
+    estimator = getattr(request.app.state, 'rent_estimator', None)
+    new_codes = codes - rents.keys()
+    if estimator is not None and new_codes:
+        found = await estimator.estimate_many(new_codes)
+        rents |= {c: e.model_dump(mode='json') for c, e in found.items()}
+    return rents
 
 
 @router.get('/{session_id}', responses=error_responses(404))

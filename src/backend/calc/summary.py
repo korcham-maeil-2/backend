@@ -3,6 +3,9 @@
     1) 공고마다 월 잔여액 (remaining.py, 통근 / 이사)
     2) 연봉 비공개 공고마다 손익분기 연봉 (break_even.py)
 
+이사할 집 월세를 사용자가 비워 두면, 그 회사 지역의 실거래가 추정값(get_rent 노드,
+public_data/rent.py)을 '추정'으로 채워 계산한다. 사용자가 넣은 값이 있으면 그 값이 먼저다.
+
 잘못된 값이 와도 그래프가 멈추지 않게, 문제가 있는 부분만 errors에 적고 나머지는 계산한다.
 돌려주는 값은 체크포인터(SQLite)에 저장되도록 평범한 dict다.
 """
@@ -19,8 +22,16 @@ from backend.calc.break_even import (
     needs_break_even,
     pick_baseline,
 )
-from backend.calc.remaining import OutputModel, PostingResult, UserProfile, monthly_remaining
+from backend.calc.remaining import (
+    Cost,
+    OutputModel,
+    PostingCosts,
+    PostingResult,
+    UserProfile,
+    monthly_remaining,
+)
 from backend.normalize.schema import ComparisonRow
+from backend.public_data.rent import RentEstimate
 
 logger = logging.getLogger(__name__)
 
@@ -38,10 +49,21 @@ class CalculationResult(OutputModel):
         default=None, description='손익분기 연봉 관련 안내 (기준을 못 정한 이유 등)'
     )
     errors: list[str] = Field(default_factory=list, description='계산하지 못한 부분과 이유')
+    rent_estimates: list[RentEstimate] = Field(
+        default_factory=list,
+        description=(
+            '회사 지역별 원룸급 월세 추정 (국토부 실거래가). 이사할 집 월세를 비우면 이 값을 씀'
+        ),
+    )
 
 
-def calculate_all(table: list[dict] | None, profile: dict | None) -> dict[str, Any]:
-    """비교표(dict 목록)와 사용자 정보(dict)로 공고별 잔여액과 손익분기 연봉을 만든다."""
+def calculate_all(
+    table: list[dict] | None, profile: dict | None, rents: dict[str, dict] | None = None
+) -> dict[str, Any]:
+    """비교표(dict 목록)와 사용자 정보(dict)로 공고별 잔여액과 손익분기 연봉을 만든다.
+
+    rents: 시군구 코드 → 월세 추정(RentEstimate의 dict). get_rent 노드가 만든다.
+    """
     errors: list[str] = []
     user: UserProfile | None = None
     if profile is not None:
@@ -51,15 +73,16 @@ def calculate_all(table: list[dict] | None, profile: dict | None) -> dict[str, A
             errors.append(f'사용자 정보 형식이 잘못돼서 쓰지 않았어요: {e.error_count()}곳')
 
     table = table or []
-    rows, results = [], []
+    rows = []
     for i, raw in enumerate(table, start=1):
         try:
-            row = ComparisonRow.model_validate(raw)
+            rows.append(ComparisonRow.model_validate(raw))
         except ValidationError as e:
             errors.append(f'{i}번째 공고 형식이 잘못돼서 계산하지 못했어요: {e.error_count()}곳')
-            continue
-        rows.append(row)
-        results.append(monthly_remaining(row, user))
+    estimates = _rent_estimates(rents)
+    if user is not None:
+        user = _fill_move_housing(user, rows, estimates)
+    results = [monthly_remaining(row, user) for row in rows]
 
     if user is not None:
         errors += _unknown_posting_ids(user, rows)
@@ -71,8 +94,51 @@ def calculate_all(table: list[dict] | None, profile: dict | None) -> dict[str, A
         break_even=break_evens,
         break_even_note=' '.join(notes) or None,
         errors=errors,
+        rent_estimates=[
+            estimates[c] for c in sorted({_lawd(r) for r in rows} - {None}) if c in estimates
+        ],
     )
     return result.model_dump(mode='json')
+
+
+def _lawd(row: ComparisonRow) -> str | None:
+    location = row.location.value
+    return location.lawd_cd if location else None
+
+
+def _rent_estimates(rents: dict[str, dict] | None) -> dict[str, RentEstimate]:
+    out = {}
+    for code, raw in (rents or {}).items():
+        try:
+            out[code] = RentEstimate.model_validate(raw)
+        except ValidationError:
+            logger.warning('저장된 월세 추정이 지금 모양과 맞지 않아 쓰지 않았습니다: %s', code)
+    return out
+
+
+def _fill_move_housing(
+    user: UserProfile, rows: list[ComparisonRow], estimates: dict[str, RentEstimate]
+) -> UserProfile:
+    """이사할 집 월세가 빈 공고에 그 지역 월세 추정값을 '추정'으로 넣은 사본.
+
+    채우지 않는 경우: 사용자가 값을 넣음 / 이사를 생각하지 않음(move_possible=False) /
+    회사가 사택·기숙사를 줌 (시세가 아니라 본인 부담 금액을 물어야 한다) / 추정값이 없음.
+    """
+    postings = dict(user.postings)
+    for row in rows:
+        estimate = estimates.get(_lawd(row) or '')
+        costs = user.costs_for(row.id)
+        if (
+            estimate is None
+            or estimate.monthly_rent_krw is None
+            or costs.move_housing is not None
+            or costs.move_possible is False
+            or row.company_housing.value is True
+        ):
+            continue
+        rent = Cost(value=estimate.monthly_rent_krw, status='estimated', source=estimate.source)
+        postings[row.id] = PostingCosts(**{**costs.model_dump(), 'move_housing': rent})
+    return user.model_copy(update={'postings': postings})
 
 
 def _unknown_posting_ids(user: UserProfile, rows: list[ComparisonRow]) -> list[str]:

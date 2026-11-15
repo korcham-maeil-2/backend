@@ -20,11 +20,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from backend.api.errors import register_error_handlers, register_upload_size_limit
+from backend.api.rent import router as rent_router
 from backend.api.sessions import router as sessions_router
 from backend.graph import build_graph
 from backend.inputs.read import FileReader, daily_budget_from_env
 from backend.inputs.transcribe import ClaudeTranscriber, FixtureTranscriber, Transcriber
 from backend.normalize import Extractor, make_extractor, parse_mode
+from backend.public_data.rent import HttpRentFetcher, RentCache, RentEstimator, RentFetcher
 
 # 그래프 상태를 저장할 SQLite 파일 위치 (Docker에서는 이 경로를 볼륨에 둔다).
 # SQLite는 별도 DB 서버 없이 파일 하나로 동작하는 데이터베이스다.
@@ -47,6 +49,7 @@ def create_app(
     db_path: str | None = None,
     extractor: Extractor | None = None,
     transcriber: Transcriber | None = None,
+    rent_fetcher: RentFetcher | None = None,
 ) -> FastAPI:
     """FastAPI 앱을 만들어 돌려준다.
 
@@ -58,6 +61,9 @@ def create_app(
       테스트는 API를 부르지 않도록 항상 가짜를 넣는다.
     transcriber: 이미지 글자 옮겨 적기. 안 주면 claude 모드는 실제 Claude(하루 한도 있음),
       fixture·테스트는 미리 받아 둔 시연 파일 글(비용 0원).
+    rent_fetcher: 국토부 실거래가 조회. 안 주면 환경 변수 DATA_GO_KR_SERVICE_KEY가 있을 때만
+      실제 공공데이터포털을 부른다 (무료, 결과는 같은 SQLite 파일에 캐시).
+      키도 없으면 월세를 조회하지 않는다.
     """
     db_path = db_path or os.getenv('CHECKPOINT_DB_PATH', DEFAULT_DB_PATH)
     # 공고 정리 방법: 'claude'(실제) / 'fixture'(미리 써 둔 응답) / 'custom'(테스트가 직접 넣음).
@@ -81,6 +87,11 @@ def create_app(
     else:
         file_reader = FileReader(FixtureTranscriber())
 
+    if rent_fetcher is None and os.getenv('DATA_GO_KR_SERVICE_KEY', '').strip():
+        rent_fetcher = HttpRentFetcher(os.environ['DATA_GO_KR_SERVICE_KEY'].strip())
+    if rent_fetcher is None:
+        logger.info('DATA_GO_KR_SERVICE_KEY가 없어 월세 실거래가를 조회하지 않습니다.')
+
     # [lifespan — 서버가 켜질 때 / 꺼질 때 할 일]
     # yield 앞: 서버가 켜질 때 한 번 실행 (DB 연결 열기, 그래프 만들기)
     # yield 뒤: 서버가 꺼질 때 실행 (async with 블록이 끝나면서 DB 연결이 자동으로 닫힌다)
@@ -91,7 +102,11 @@ def create_app(
         # 'Async'는 DB를 기다리는 동안 서버가 다른 요청도 처리할 수 있다는 뜻(비동기).
         async with AsyncSqliteSaver.from_conn_string(db_path) as saver:
             # app.state: 앱 전체에서 같이 쓰는 보관함. 요청 처리 함수들이 여기서 그래프를 꺼내 쓴다.
-            app.state.graph = build_graph(saver, extractor)
+            rent_estimator = (
+                RentEstimator(rent_fetcher, RentCache(db_path)) if rent_fetcher else None
+            )
+            app.state.rent_estimator = rent_estimator
+            app.state.graph = build_graph(saver, extractor, rent_estimator)
             app.state.file_reader = file_reader
             yield
 
@@ -123,6 +138,7 @@ def create_app(
 
     # 세션 관련 주소들(/sessions ...)은 api/sessions.py에 모아 두고 여기서 붙인다.
     app.include_router(sessions_router)
+    app.include_router(rent_router)
     return app
 
 

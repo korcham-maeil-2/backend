@@ -1,7 +1,7 @@
 """그래프 노드 — 그래프 안에서 실제로 일을 하는 함수들.
 
 실행 순서:
-    route_input → normalize → confirm_table(여기서 멈춤) → calculate → write_report
+    route_input → normalize → confirm_table(여기서 멈춤) → get_rent → calculate → write_report
 
 [노드 함수 규칙]
 - 인자로 현재 상태(state, 즉 GraphState dict)를 받는다.
@@ -12,14 +12,17 @@
 지금은 흐름만 이어 둔 '빈 노드'다. 실제 처리는 각 TODO에 적은 이슈에서 채운다.
 """
 
+import asyncio
 from collections.abc import Callable
 from typing import Any
 
+from langchain_core.runnables import RunnableLambda
 from langgraph.types import interrupt
 
 from backend.calc.summary import calculate_all
 from backend.graph.state import GraphState
 from backend.normalize import Extractor, build_rows
+from backend.public_data.rent import RentEstimator
 
 # 그래프가 멈춘 이유를 API에 알려 줄 때 쓰는 이름표.
 CONFIRM_TABLE = 'confirm_table'
@@ -96,6 +99,42 @@ def confirm_table(state: GraphState) -> dict[str, Any]:
     return update
 
 
+def table_lawd_codes(table: list[dict] | None) -> set[str]:
+    """비교표의 근무지 시군구 코드들 (코드를 정하지 못한 공고는 빠진다)."""
+    codes = set()
+    for row in table or []:
+        location = (row.get('location') or {}).get('value') or {}
+        if location.get('lawd_cd'):
+            codes.add(location['lawd_cd'])
+    return codes
+
+
+def make_get_rent(estimator: RentEstimator | None) -> RunnableLambda:
+    """get_rent 노드를 만든다. estimator가 없으면(인증키 없음·테스트) 조회하지 않는다.
+
+    조회는 비동기(여러 달·유형을 한꺼번에 요청)라 async 함수로 만들고, 그래프를 동기로 돌리는
+    테스트(graph.invoke)를 위해 같은 일을 하는 동기 함수도 함께 준다 (RunnableLambda).
+    """
+
+    async def get_rent(state: GraphState) -> dict[str, Any]:
+        """회사 지역마다 원룸급 월세 시세를 국토부 실거래가로 추정한다 (public_data/rent.py).
+
+        - 확인된 비교표의 근무지(시군구 코드)마다 한 번씩, 결과는 SQLite에 캐시
+        - 사용자가 이사할 집 월세를 비워 두면 calculate가 이 값을 '추정'으로 쓴다
+        - 조회에 실패해도 그래프는 멈추지 않는다 (그 지역만 status='missing')
+        TODO(#16): get_local_support(청년 지원 조회)와 병렬로 돌린다.
+        """
+        if estimator is None:
+            return {'rent_estimates': {}}
+        found = await estimator.estimate_many(table_lawd_codes(state.get('table')))
+        return {'rent_estimates': {c: e.model_dump(mode='json') for c, e in found.items()}}
+
+    def get_rent_sync(state: GraphState) -> dict[str, Any]:
+        return asyncio.run(get_rent(state))
+
+    return RunnableLambda(get_rent_sync, afunc=get_rent, name='get_rent')
+
+
 def calculate(state: GraphState) -> dict[str, Any]:
     """확인된 비교표로 매달 남는 돈을 계산한다.
 
@@ -103,7 +142,11 @@ def calculate(state: GraphState) -> dict[str, Any]:
     (backend/calc/remaining.py). 숫자 계산은 LLM이 아니라 이 파이썬 코드가 한다 (설계 원칙).
     사용자 정보(user_profile)가 없으면 세후 월급까지만 계산하고 잔여액은 null로 둔다.
     """
-    return {'result': calculate_all(state.get('table', []), state.get('user_profile'))}
+    return {
+        'result': calculate_all(
+            state.get('table', []), state.get('user_profile'), state.get('rent_estimates')
+        )
+    }
 
 
 def write_report(state: GraphState) -> dict[str, Any]:

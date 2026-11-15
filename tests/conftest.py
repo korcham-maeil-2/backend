@@ -33,6 +33,9 @@ def no_real_anthropic_calls(monkeypatch):
         raise AssertionError('테스트에서 실제 Claude API 클라이언트를 만들면 안 됩니다')
 
     monkeypatch.setattr(anthropic, 'Anthropic', forbidden)
+    # 공공데이터포털(월세 실거래가)도 부르지 않는다: 키가 없으면 앱이 조회기를 만들지 않는다.
+    # 월세 테스트는 가짜 조회기(rent_fetcher)를 직접 넣는다.
+    monkeypatch.delenv('DATA_GO_KR_SERVICE_KEY', raising=False)
 
 
 @pytest.fixture
