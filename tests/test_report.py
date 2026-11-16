@@ -115,6 +115,7 @@ def test_literal_amounts_are_rejected(draft):
         '청년 지원 정책과 원룸 시세',
         '2020\n원룸 시세를 봤어요.',  # 줄 끝 숫자 + 다음 줄 '원룸'
         '최대 3번 다시 써요.',
+        '출처: https://www.data.go.kr/data/15126474/openapi.do',  # 주소 속 숫자
     ],
 )
 def test_non_money_numbers_pass(draft):

@@ -287,6 +287,7 @@ _LITERAL_MONEY = re.compile(
     r'|\d{1,3}(?:,\d{3})+(?![\d,]*[ \t]*(?:건|명|개|㎡|년|개월|%))'
     r'|(?<![\d,.])\d{5,}'
 )
+_URL = re.compile(r'https?://\S+')
 _DEFICIT = re.compile(r'적자|모자[라랍란]|부족')
 _SURPLUS = re.compile(r'남[아습는았을]|여유|흑자')
 _AFTER = 15  # 자리표시 뒤 몇 글자까지 '남아요·모자라요'를 볼지
@@ -344,7 +345,7 @@ def check_draft(draft: str, amounts: Amounts) -> list[str]:
     problems = []
     refs = _refs(draft, amounts)
     problems += [r.error for r in refs if r.error]
-    bare = _PLACEHOLDER.sub(' ', draft)
+    bare = _URL.sub(' ', _PLACEHOLDER.sub(' ', draft))  # 주소 속 숫자는 금액이 아니다
     if '{{' in bare or '}}' in bare:
         problems.append('자리표시 괄호가 덜 닫혔어요. {{A1}}처럼 써 주세요')
     for m in _LITERAL_MONEY.finditer(bare):
