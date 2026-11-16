@@ -59,7 +59,7 @@ from backend.inputs.read import (
     safe_name,
 )
 from backend.normalize import NormalizeError
-from backend.report import ReportCheck
+from backend.report import ReportAgent, ReportCheck
 from backend.report import skipped as report_skipped
 from backend.support import LocalSupport, find_local_support
 
@@ -365,7 +365,10 @@ async def recalculate(
             # 근무지·나이가 바뀌었을 수 있어 다시 고른다 (같은 지역은 캐시라 바로 끝난다)
             'local_support': await _local_support_for(request, table, profile),
         }
-        report = await _report_for(request, {**values, **update})
+        # 넘길 사실이 그대로면(아무것도 안 고침) 예전 리포트를 그대로 쓴다 (Claude 호출 없음)
+        report = ReportAgent.reusable(values, {**values, **update}) or await _report_for(
+            request, {**values, **update}
+        )
         await graph.aupdate_state(config, {**update, **report}, as_node='verify_report')
         return await _snapshot(graph, session_id)
 
