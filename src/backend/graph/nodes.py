@@ -2,7 +2,8 @@
 
 실행 순서:
     route_input → normalize → confirm_table(여기서 멈춤) ─┬→ get_rent → calculate ─┬→ write_report
-                                                        └→ get_local_support ───┘
+                                                        └→ get_local_support ───┘      ↕
+                                                                                 verify_report
 
 [노드 함수 규칙]
 - 인자로 현재 상태(state, 즉 GraphState dict)를 받는다.
@@ -19,12 +20,15 @@ from collections.abc import Callable
 from typing import Any
 
 from langchain_core.runnables import RunnableLambda
+from langgraph.graph import END
 from langgraph.types import interrupt
 
 from backend.calc.summary import calculate_all
 from backend.graph.state import GraphState
 from backend.normalize import Extractor, build_rows
 from backend.public_data.rent import RentEstimator
+from backend.report import ReportAgent, ReportCheck
+from backend.report import skipped as report_skipped
 from backend.support import PolicySource, find_local_support
 
 logger = logging.getLogger(__name__)
@@ -74,6 +78,7 @@ def make_normalize(extract: Extractor) -> Callable[[GraphState], dict[str, Any]]
             'result': None,
             'local_support': None,
             'report': None,
+            'report_check': None,
         }
 
     return normalize
@@ -181,7 +186,49 @@ def calculate(state: GraphState) -> dict[str, Any]:
     }
 
 
-def write_report(state: GraphState) -> dict[str, Any]:
-    """계산 결과를 사람이 읽을 리포트 문장으로 쓴다."""
-    # TODO(#19): LLM으로 리포트를 쓰고, 숫자가 계산 결과와 맞는지 스스로 검증한다.
-    return {'report': '계산 엔진이 아직 연결되지 않았습니다.'}
+def make_report_nodes(agent: ReportAgent | None):
+    """write_report·verify_report 노드와, verify 뒤에 어디로 갈지 정하는 함수를 만든다.
+
+    agent가 없으면(Claude 키 없음·시연 모드·테스트) 리포트를 쓰지 않는다 (report_check=skipped).
+
+        write_report → verify_report ─(문제 있음, 횟수 남음)→ write_report
+                                    └(통과 / 횟수 끝 / 실패)→ 끝
+    """
+
+    def write_report(state: GraphState) -> dict[str, Any]:
+        """계산 결과를 쉬운 말 리포트로 쓴다 (Claude Sonnet). 앞 검증의 문제가 있으면 고쳐 쓴다."""
+        if agent is None:
+            return report_skipped()
+        try:
+            return agent.write(state)
+        except Exception:
+            # 리포트는 덤이다: 실패해도 계산 결과는 보여 준다 (노드가 죽으면 세션이 갇힌다)
+            logger.exception('리포트를 쓰지 못했습니다')
+            return report_failed()
+
+    def verify_report(state: GraphState) -> dict[str, Any]:
+        """리포트의 금액을 코드로 대조하고, 다른 문제는 Claude Haiku가 본다 (report/agent.py)."""
+        if agent is None:
+            return {}
+        try:
+            return agent.verify(state)
+        except Exception:
+            logger.exception('리포트를 검증하지 못했습니다')
+            return report_failed()
+
+    def after_verify(state: GraphState) -> str:
+        return 'write_report' if ReportAgent.needs_rewrite(state) else END
+
+    return write_report, verify_report, after_verify
+
+
+def report_failed() -> dict[str, Any]:
+    check = ReportCheck(
+        status='unavailable', reason='리포트를 쓰지 못했어요. 계산 결과는 그대로 볼 수 있어요.'
+    )
+    return {
+        'report': None,
+        'report_check': check.model_dump(mode='json'),
+        'report_draft': None,
+        'report_problems': None,
+    }

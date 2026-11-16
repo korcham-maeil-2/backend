@@ -54,5 +54,11 @@ class GraphState(TypedDict, total=False):
     # 모양은 backend/support/policies.py의 LocalSupport (dict). 인증키가 없으면 None.
     local_support: dict[str, Any] | None
 
-    # 최종 리포트 문장. write_report 노드가 채운다.
+    # 최종 리포트 문장. 검증을 통과했을 때만 채운다 (report/agent.py).
     report: str | None
+    # 리포트 검증 결과 (ReportCheck의 dict): verified / unverified / unavailable / skipped
+    report_check: dict[str, Any] | None
+    # 쓰는 중에만 쓰는 칸: 검증 전 초안, 쓴 횟수, 다시 쓸 때 알려 줄 문제 목록
+    report_draft: str | None
+    report_attempts: int
+    report_problems: list[str] | None

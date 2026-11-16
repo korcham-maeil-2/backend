@@ -60,7 +60,8 @@ def test_start_stops_at_confirm_table_then_confirm_completes(tmp_path):
         assert result['has_user_profile'] is False
         assert result['postings'][0]['net_income']['value'] is not None
         assert [s['monthly_remaining'] for s in result['postings'][0]['scenarios']] == [None, None]
-        assert done['report']
+        assert done['report'] is None  # 리포트 에이전트 없음 → 꺼짐 (tests/test_report.py)
+        assert done['report_check']['status'] == 'skipped'
 
 
 def test_state_survives_restart_in_sqlite(tmp_path):

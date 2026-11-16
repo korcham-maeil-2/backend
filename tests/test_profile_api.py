@@ -98,7 +98,9 @@ def test_recalculate_recalculates_without_rebuilding_table(tmp_path):
         assert remaining(after)['move'] == remaining(first)['move']
         assert after['table'] == first['table']  # 비교표는 그대로
         assert len(extractor.calls) == calls  # 공고 정리(LLM)를 다시 부르지 않음
-        assert after['report']
+        # 테스트 앱은 리포트 에이전트가 없다 → 리포트는 꺼짐 (tests/test_report.py가 따로 본다)
+        assert after['report'] is None
+        assert after['report_check']['status'] == 'skipped'
         assert after['profile']['current_housing']['value'] == changed['current_housing']['value']
 
         # 또 바꿔도 된다
