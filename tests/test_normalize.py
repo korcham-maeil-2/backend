@@ -26,7 +26,7 @@ from backend.normalize import (
     NormalizeError,
     checks,
 )
-from backend.normalize.rows import REGION_QUESTION, build_rows
+from backend.normalize.rows import REGION_QUESTION, build_rows, make_questions
 
 # expected.json은 '언급 없음'도 false로 적은 곳이 있다. 우리 스키마는 '언급 없음'을
 # 지어내지 않고 missing(공고에 없음)으로 둔다. 그 차이를 여기에 이유와 함께 적어 둔다.
@@ -553,11 +553,9 @@ def test_questions_are_made_by_code():
     assert row_for('near_pangyo').questions_to_ask == []
     assert row_for('down_naju').questions_to_ask == [
         '제시받은 연봉 (공고에 금액 없음)',
-        '한 달 예상 연장근로 시간 (모르면 0시간으로 계산)',
+        '한 달 예상 연장근로 시간',
     ]
-    assert row_for('across_gwangju').questions_to_ask == [
-        '한 달 예상 연장근로 시간 (모르면 0시간으로 계산)'
-    ]
+    assert row_for('across_gwangju').questions_to_ask == ['한 달 예상 연장근로 시간']
 
 
 def test_questions_carry_their_fields():
@@ -574,6 +572,38 @@ def test_questions_carry_their_fields():
     for pid in ('stay_ulsan', 'down_naju', 'near_pangyo', 'across_gwangju', 'up_seoul'):
         row = row_for(pid)
         assert row.questions_to_ask == [q.text for q in row.questions]
+
+
+def test_empty_values_are_optional_and_say_how_they_are_calculated():
+    """빈 값은 몰라도 계산된다 → 'optional'에, 비워 두면 어떻게 계산하는지를 함께 준다.
+
+    (화면이 '확인이 필요한 것'을 숙제처럼 보이지 않게, 꼭 볼 것(check)과 나눠 보여 준다)
+    """
+    unknown = {q.text: (q.kind, q.if_unknown) for q in row_for('down_naju').questions}
+    assert unknown == {
+        '제시받은 연봉 (공고에 금액 없음)': ('optional', '최소 얼마를 받아야 하는지 계산해요'),
+        '한 달 예상 연장근로 시간': ('optional', '0시간으로 계산해요'),
+    }
+    for pid in ('stay_ulsan', 'down_naju', 'near_pangyo', 'across_gwangju', 'up_seoul'):
+        assert all(q.if_unknown for q in row_for(pid).questions if q.kind == 'optional')
+
+
+def test_housing_period_question_matches_calculation():
+    """지원 기간을 모를 때 남는 돈은 계속 받는 것으로(remaining.py), 손익분기 연봉은 지원이 끝난
+    뒤 기준으로(break_even.long_term) 계산한다. 연봉 칸을 바꿔도 맞게 두 경우를 다 적는다."""
+    row = row_for('down_naju')  # 주거지원비 월 20만원
+    row.housing_allowance_months.value = None
+    found = {q.text: q.if_unknown for q in make_questions(row, region_ok=True)}
+    assert found['주거지원비 지원 기간 (공고에 없음)'] == (
+        '남는 돈은 지원을 계속 받는 것으로, 최소 연봉은 지원이 끝난 뒤를 기준으로 계산해요'
+    )
+
+
+def test_question_saved_before_kind_existed_still_reads():
+    from backend.normalize.schema import Question
+
+    old = Question.model_validate({'text': '제시받은 연봉 (공고에 금액 없음)', 'fields': []})
+    assert old.kind == 'optional' and old.if_unknown is None
 
 
 @pytest.mark.parametrize(
@@ -669,8 +699,10 @@ def test_estimated_allowance_is_listed_in_questions():
         other_allowances=[ExtractedAllowance(name='교육비', monthly_krw=1_000_000, quote=text)],
     )
     assert any('기타 수당(교육비)' in q for q in row.questions_to_ask)
-    [estimated] = [q for q in row.questions if q.text.startswith('원문과 맞는지')]
+    [estimated] = [q for q in row.questions if q.kind == 'check']
     assert 'other_allowances.0' in estimated.fields
+    # AI가 추정한 값만 '꼭 확인'(check)으로 따로 묶는다
+    assert estimated.kind == 'check' and estimated.if_unknown is None
 
 
 def test_salary_copied_across_postings_is_estimated():
@@ -760,6 +792,8 @@ def test_meal_not_filled_from_unverified_quote():
         ('식대 월 20만원 (비포함)', False),
         ('식대 월 20만원은 연봉에 포함되지 않음', False),
         ('식대 월 20만원 (연봉 포함 안 됨)', False),
+        ('식대 월 20만원은 연봉에 포함하지 않음', False),
+        ('식대 월 20만원 (연봉 포함 아님)', False),
         ('식대 월 20만원 별도', False),
         # 연봉과 상관없는 '포함'·식대와 상관없는 '별도'로는 정하지 않는다
         ('식대 월 20만원 (세금 포함)', None),

@@ -50,5 +50,9 @@ class GraphState(TypedDict, total=False):
     # 계산 결과 (공고별·경우별 월 잔여액). calculate 노드가 채운다.
     result: dict[str, Any] | None
 
+    # 근무지 지역별로 받을 수 있는 청년 지원 (온통청년). get_local_support 노드가 채운다.
+    # 모양은 backend/support/policies.py의 LocalSupport (dict). 인증키가 없으면 None.
+    local_support: dict[str, Any] | None
+
     # 최종 리포트 문장. write_report 노드가 채운다.
     report: str | None

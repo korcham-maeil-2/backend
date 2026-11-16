@@ -11,7 +11,7 @@ from datetime import date
 from fastapi import APIRouter, Request, status
 
 from backend.api.errors import AppError, ErrorCode, error_responses
-from backend.normalize.checks import load_regions
+from backend.normalize.checks import region_by_code
 from backend.public_data.rent import RentEstimate, period_text, recent_months, rentable
 
 router = APIRouter(prefix='/rent', tags=['rent'], responses=error_responses(422, 500))
@@ -34,7 +34,7 @@ async def get_rent(lawd_cd: str, request: Request) -> RentEstimate:
     if estimator is None:
         return RentEstimate(
             lawd_cd=lawd_cd,
-            region=next(f'{r.sido} {r.sigungu}' for r in load_regions() if r.lawd_cd == lawd_cd),
+            region=region_by_code(lawd_cd).name,  # rentable()로 있는 코드임을 확인했다
             monthly_rent_krw=None,
             period=period_text(recent_months(date.today())),
             source='국토교통부 전월세 실거래가',

@@ -109,7 +109,13 @@ class OtherAllowance(BaseModel):
 
 
 class Question(BaseModel):
-    """물어볼 것 하나. 화면이 문장을 보고 칸을 추측하지 않게, 어느 칸 질문인지 함께 준다."""
+    """물어볼 것 하나. 화면이 문장을 보고 칸을 추측하지 않게, 어느 칸 질문인지 함께 준다.
+
+    종류(kind)로 화면이 두 묶음으로 나눠 보여 준다:
+      check    AI가 추정한 값 → 원문과 맞는지 꼭 봐 주세요 (눈에 띄게)
+      optional 공고에 없는 값 → 알면 넣고, 몰라도 계산된다 (if_unknown에 어떻게 계산하는지)
+    kind·if_unknown은 기본값이 있어서, 이 칸이 생기기 전에 저장한 세션도 그대로 읽힌다.
+    """
 
     text: str = Field(description='화면에 보여 줄 문장')
     fields: list[str] = Field(
@@ -118,6 +124,14 @@ class Question(BaseModel):
             '이 질문이 가리키는 칸 이름 (예: annual_salary_krw, location, '
             'other_allowances.0). 비어 있으면 칸이 없는 질문 (예: 연장근로 시간)'
         ),
+    )
+    kind: Literal['check', 'optional'] = Field(
+        default='optional',
+        description='check=AI가 추정한 값(원문과 맞는지 볼 것), optional=몰라도 계산되는 빈 값',
+    )
+    if_unknown: str | None = Field(
+        default=None,
+        description="비워 두면 어떻게 계산하는지 (예: '0시간으로 계산해요'). optional일 때",
     )
 
 

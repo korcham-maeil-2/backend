@@ -153,6 +153,12 @@ class UserProfile(InputModel):
         le=MAX_KRW,
         description='매달 남아야 하는 목표 금액. 있으면 손익분기 기준으로 가장 먼저 쓴다',
     )
+    age: int | None = Field(
+        default=None,
+        ge=15,
+        le=99,
+        description='만 나이. 청년 지원 정책을 나이 조건으로 거르는 데만 쓴다 (계산에는 안 씀)',
+    )
 
     @model_validator(mode='after')
     def _children_fewer_than_family(self):
@@ -334,6 +340,26 @@ def _from_cost(label: str, cost: Cost | None, missing_source: str) -> Item:
     return Item(label=label, value=cost.value, status=cost.status, source=cost.source)
 
 
+def housing_aid(row: ComparisonRow) -> tuple[int, int | None] | None:
+    """주거지원비 (월 금액, 지원 개월 수 — 모르면 None). 지원이 없으면 None.
+
+    '0개월'은 지원 없음, 기간이 비어 있으면(None) '모름'이다.
+    남는 돈(여기)·손익분기 연봉(break_even.long_term)이 같은 규칙을 쓰도록 한 곳에 둔다.
+    """
+    aid, months = row.housing_allowance_monthly_krw.value, row.housing_allowance_months.value
+    return (aid, months) if aid and months != 0 else None
+
+
+def _housing_aid_note(months: int | None) -> str:
+    """이사 경우 남는 돈에 주거지원비를 뺐을 때 붙이는 안내 (지원은 언젠가 끝날 수 있다)."""
+    if months:
+        return f'주거지원비는 {months}개월 뒤 끝나, 그 뒤로는 이사한 경우에 남는 돈이 줄어요.'
+    return (
+        '주거지원비는 지원 기간을 몰라 계속 받는 것으로 계산했어요. '
+        '지원이 끝나면 이사한 경우에 남는 돈이 줄어요.'
+    )
+
+
 def _move_housing(row: ComparisonRow, cost: Cost | None) -> Item:
     """이사 경우 주거비 = 새 집 주거비 − 주거지원비 (0원 아래로는 안 내려감)."""
     label = '주거비 (이사)'
@@ -345,17 +371,17 @@ def _move_housing(row: ComparisonRow, cost: Cost | None) -> Item:
             source='사택·기숙사 제공 (본인 부담 금액이 공고에 없음)',
         )
     item = _from_cost(label, cost, '이사할 집의 월 주거비 없음')
-    aid = row.housing_allowance_monthly_krw
-    months = row.housing_allowance_months.value
-    if item.value is None or not aid.value or months == 0:  # 0개월 = 지원 없음
+    aid = housing_aid(row)
+    if item.value is None or aid is None:
         return item
+    amount, months = aid
     period = f' ({months}개월간)' if months else ''
     base = item.source or '새 집 주거비'
     return Item(
         label=label,
-        value=max(item.value - aid.value, 0),
-        status=weakest([item.status, _status_of(aid)]),
-        source=f'{base} {won(item.value)} − 주거지원비 {won(aid.value)}{period}',
+        value=max(item.value - amount, 0),
+        status=weakest([item.status, _status_of(row.housing_allowance_monthly_krw)]),
+        source=f'{base} {won(item.value)} − 주거지원비 {won(amount)}{period}',
     )
 
 
@@ -393,18 +419,13 @@ def _scenario(
     )
 
 
-def _notes(row: ComparisonRow, has_net: bool) -> list[str]:
-    """화면에 함께 보여 줄 안내. 남는 돈에 관한 안내는 남는 돈을 계산했을 때만 단다
-    (연봉 비공개 공고는 손익분기 연봉 쪽 안내가 대신한다 — break_even.py)."""
+def _notes(row: ComparisonRow) -> list[str]:
+    """공고 조건에 관한 안내 (수습·연장근로). 주거지원비 안내는 이사 주거비에서 실제로 뺐을 때만
+    monthly_remaining이 단다."""
     notes = []
     rate, months = row.probation_pay_rate.value, row.probation_months.value
     if months and rate is not None and rate < 1:
         notes.append(f'수습 {months}개월 동안은 급여의 {rate:.0%}만 받아서 그동안은 덜 남아요.')
-    if has_net and row.housing_allowance_monthly_krw.value and row.housing_allowance_months.value:
-        notes.append(
-            f'주거지원비는 {row.housing_allowance_months.value}개월 뒤 끝나 '
-            '그때부터 이사하면 남는 돈이 줄어요.'
-        )
     if row.overtime.value:
         notes.append('연장근로수당은 금액을 알 수 없어서 계산에 넣지 않았어요.')
     return notes
@@ -420,14 +441,14 @@ def monthly_remaining(row: ComparisonRow, profile: UserProfile | None) -> Postin
     notes: list[str] = []
     try:
         net, slip, net_notes = _net_income(row, profile or UserProfile(), allowances)
-        notes = _notes(row, has_net=net.value is not None) + net_notes
+        notes = _notes(row) + net_notes
     except ValueError:  # 간이세액표 범위 밖 등 — 입력 검사로 막혀 있지만, 와도 계산은 계속한다
         # 예외 글은 개발자용(합쇼체·원 단위 숫자)이라 화면에는 정해 둔 문장만 보낸다.
         # 원문은 로그로 남긴다.
         logger.exception('세후 월급 계산 실패: %s', row.id)
         reason = '세후 월급을 계산하지 못했어요. 급여 칸을 확인해 주세요.'
         net, slip = Item(label='세후 월급', value=None, status='missing', source=reason), None
-        notes = [*_notes(row, has_net=False), reason]
+        notes = [*_notes(row), reason]
     if profile is None and net.value is not None:
         # 가족 수를 몰라 1인 가구로 계산했으므로 '확인'이라고 할 수 없다
         net = net.model_copy(update={'status': weakest([net.status, 'estimated'])})
@@ -453,6 +474,11 @@ def monthly_remaining(row: ComparisonRow, profile: UserProfile | None) -> Postin
         _from_cost('교통비 (이사)', costs.move_transport, '이사한 뒤 교통비 없음'),
         costs.move_possible,
     )
+    # 주거지원비 안내는 이사 주거비에서 실제로 뺐을 때만 단다 (이사할 집 주거비가 없거나
+    # 이사를 안 하면 뺀 적이 없다). 세후 월급이 없으면 손익분기 연봉 쪽 안내가 대신한다.
+    aid = housing_aid(row)
+    if aid and net.value is not None and move.applicable and move.housing.value is not None:
+        notes.append(_housing_aid_note(aid[1]))
     if row.shuttle_bus.value:
         notes.append('통근버스가 있어서 통근 교통비가 줄어들 수 있어요.')
     return PostingResult(

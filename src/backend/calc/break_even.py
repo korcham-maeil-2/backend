@@ -42,6 +42,7 @@ from backend.calc.remaining import (
     PostingResult,
     Scenario,
     UserProfile,
+    housing_aid,
     monthly_remaining,
     weakest,
 )
@@ -128,15 +129,14 @@ def long_term(row: ComparisonRow) -> tuple[ComparisonRow, list[str]]:
     기간을 모를 때도 '끝날 수 있다'고 보고 뺀다 — 남는 돈을 부풀리지 않는 쪽.
     주거지원비는 이사 경우에만 쓰이므로 안내도 이사 경우에만 붙인다.
     """
-    notes: list[str] = []
-    aid, months = row.housing_allowance_monthly_krw.value, row.housing_allowance_months.value
-    if not aid or months == 0:
-        return row, notes
+    aid = housing_aid(row)
+    if aid is None:
+        return row, []
+    amount, months = aid
     copy = row.model_copy(deep=True)
     copy.housing_allowance_monthly_krw.value = None
     period = f'{months}개월 뒤 끝나므로' if months else '지원 기간을 몰라서'
-    notes.append(f'주거지원비 월 {won(aid)}은 {period} 지원이 끝난 뒤를 기준으로 계산했어요.')
-    return copy, notes
+    return copy, [f'주거지원비 월 {won(amount)}은 {period} 지원이 끝난 뒤를 기준으로 계산했어요.']
 
 
 # ── 기준 고르기 ──────────────────────────────────────────────────

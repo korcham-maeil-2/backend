@@ -60,7 +60,11 @@ def test_health_tells_mode(tmp_path, monkeypatch):
     """프론트가 '시연 모드' 표시를 띄울 수 있게 /health에 모드를 싣는다."""
     monkeypatch.setenv('NORMALIZE_MODE', 'fixture')
     with TestClient(create_app(str(tmp_path / 'cp.sqlite'))) as c:
-        assert c.get('/health').json() == {'status': 'ok', 'normalize_mode': 'fixture'}
+        assert c.get('/health').json() == {
+            'status': 'ok',
+            'normalize_mode': 'fixture',
+            'local_support': False,  # 테스트에는 온통청년 키가 없다 (conftest)
+        }
 
 
 def test_absurd_values_are_rejected_with_422(tmp_path, monkeypatch):

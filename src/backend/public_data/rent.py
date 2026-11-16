@@ -40,7 +40,7 @@ import httpx
 from defusedxml import ElementTree
 from pydantic import BaseModel, ConfigDict, Field
 
-from backend.normalize.checks import load_regions
+from backend.normalize.checks import region_by_code
 
 logger = logging.getLogger(__name__)
 
@@ -276,10 +276,8 @@ def period_text(months: list[str]) -> str:
 
 
 def _region_name(lawd_cd: str) -> str | None:
-    for r in load_regions():
-        if r.lawd_cd == lawd_cd:
-            return f'{r.sido} {r.sigungu}'
-    return None
+    region = region_by_code(lawd_cd)
+    return region.name if region else None
 
 
 def usable(deals: Iterable[Deal]) -> list[Deal]:
@@ -405,4 +403,5 @@ def rentable(lawd_cd: str) -> bool:
 
     예: 성남시 41130은 False (실거래가는 분당구 41135처럼 구 코드로만 나온다).
     """
-    return any(r.lawd_cd == lawd_cd and r.selectable for r in load_regions())
+    region = region_by_code(lawd_cd)
+    return region is not None and region.selectable

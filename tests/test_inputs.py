@@ -211,6 +211,9 @@ def test_image_values_are_marked_from_image(pid, name):
     """이미지에서 읽은 값에만 '이미지에서 읽음'(from_image) 표시가 붙는다."""
     row = rows_from_files([demo(name)])[0][0]
     assert row.company.from_image is (name in IMAGE_FILES)
+    # 이미지에서 읽은 값은 '확인해 주세요'(check) 묶음에 들어간다 (원본과 다를 수 있다)
+    checks = [q for q in row.questions if q.kind == 'check']
+    assert bool(checks and 'company' in checks[0].fields) is (name in IMAGE_FILES)
 
 
 def test_csv_encodings_give_same_text():
