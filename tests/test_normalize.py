@@ -26,7 +26,7 @@ from backend.normalize import (
     NormalizeError,
     checks,
 )
-from backend.normalize.rows import REGION_QUESTION, build_rows
+from backend.normalize.rows import REGION_QUESTION, build_rows, make_questions
 
 # expected.json은 '언급 없음'도 false로 적은 곳이 있다. 우리 스키마는 '언급 없음'을
 # 지어내지 않고 missing(공고에 없음)으로 둔다. 그 차이를 여기에 이유와 함께 적어 둔다.
@@ -586,6 +586,17 @@ def test_empty_values_are_optional_and_say_how_they_are_calculated():
     }
     for pid in ('stay_ulsan', 'down_naju', 'near_pangyo', 'across_gwangju', 'up_seoul'):
         assert all(q.if_unknown for q in row_for(pid).questions if q.kind == 'optional')
+
+
+def test_housing_period_question_matches_calculation():
+    """지원 기간을 모를 때 남는 돈은 계속 받는 것으로(remaining.py), 손익분기 연봉은 지원이 끝난
+    뒤 기준으로(break_even.long_term) 계산한다. 연봉 칸을 바꿔도 맞게 두 경우를 다 적는다."""
+    row = row_for('down_naju')  # 주거지원비 월 20만원
+    row.housing_allowance_months.value = None
+    found = {q.text: q.if_unknown for q in make_questions(row, region_ok=True)}
+    assert found['주거지원비 지원 기간 (공고에 없음)'] == (
+        '남는 돈은 지원을 계속 받는 것으로, 최소 연봉은 지원이 끝난 뒤를 기준으로 계산해요'
+    )
 
 
 def test_question_saved_before_kind_existed_still_reads():

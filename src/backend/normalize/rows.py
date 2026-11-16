@@ -185,23 +185,21 @@ def make_questions(row: ComparisonRow, region_ok: bool) -> list[Question]:
 
     st = row.salary_type
     salary_field = 'monthly_salary_krw' if st.value == 'monthly' else 'annual_salary_krw'
-    salary_unknown = '최소 얼마를 받아야 하는지 계산해요'  # 손익분기 연봉 (break_even.py)
+    salary_question = None
     if st.value is None:
-        ask(
+        salary_question = (
             f'제시받은 연봉 (공고 표기: {st.source_text})'
             if st.source_text
-            else '제시받은 연봉 (공고에 없음)',
-            salary_field,
-            if_unknown=salary_unknown,
+            else '제시받은 연봉 (공고에 없음)'
         )
     elif st.value == 'undisclosed':
-        ask('제시받은 연봉 (공고에 금액 없음)', salary_field, if_unknown=salary_unknown)
-    elif st.value == 'annual' and row.annual_salary_krw.value is None:
-        ask('연봉 금액 (공고에서 금액을 읽지 못함)', 'annual_salary_krw', if_unknown=salary_unknown)
-    elif st.value == 'monthly' and row.monthly_salary_krw.value is None:
-        ask(
-            '월급 금액 (공고에서 금액을 읽지 못함)', 'monthly_salary_krw', if_unknown=salary_unknown
-        )
+        salary_question = '제시받은 연봉 (공고에 금액 없음)'
+    elif st.value in ('annual', 'monthly') and getattr(row, salary_field).value is None:
+        unit = '연봉' if st.value == 'annual' else '월급'
+        salary_question = f'{unit} 금액 (공고에서 금액을 읽지 못함)'
+    if salary_question:
+        # 비우면 손익분기 연봉을 계산한다 (break_even.py)
+        ask(salary_question, salary_field, if_unknown='최소 얼마를 받아야 하는지 계산해요')
 
     if row.probation_months.value and row.probation_pay_rate.value is None:
         ask(
@@ -216,10 +214,15 @@ def make_questions(row: ComparisonRow, region_ok: bool) -> list[Question]:
             if_unknown='연봉에 포함된 것으로 계산해요 (남는 돈이 적게 나오는 쪽)',
         )
     if row.housing_allowance_monthly_krw.value and row.housing_allowance_months.value is None:
+        # 남는 돈(remaining.py)은 지원을 계속 받는 것으로, 손익분기 연봉(break_even.long_term)은
+        # 지원이 끝난 뒤 기준으로 계산한다. 사용자가 연봉 칸을 채우거나 비우면 어느 쪽이 쓰일지
+        # 바뀌는데 이 문장은 처음 읽을 때 한 번 만들므로, 두 경우를 함께 적는다.
         ask(
             '주거지원비 지원 기간 (공고에 없음)',
             'housing_allowance_months',
-            if_unknown='계속 받는 것으로 계산해요',
+            if_unknown=(
+                '남는 돈은 지원을 계속 받는 것으로, 최소 연봉은 지원이 끝난 뒤를 기준으로 계산해요'
+            ),
         )
     if row.overtime.value is not None:
         # 시간을 넣는 칸은 없다 (계산 단계에서 묻는다)

@@ -139,6 +139,36 @@ def test_naju_with_user_salary_subtracts_housing_allowance():
     assert any('90%' in n for n in r.notes)  # 수습 급여 90%
 
 
+def test_unknown_housing_period_is_counted_as_continuing_and_noted():
+    """지원 기간을 모르면 남는 돈은 계속 받는 것으로 계산하고, 끝날 수 있다고 알린다."""
+    row = row_of('down_naju')
+    row.annual_salary_krw.value = 38_000_000
+    row.housing_allowance_months.value = None
+    profile = UserProfile.model_validate({'default_costs': {'move_housing': {'value': 450_000}}})
+    r = monthly_remaining(row, profile)
+    assert by_case(r)['move'].housing.value == 250_000  # 450,000 − 200,000
+    assert any('지원 기간을 몰라 계속 받는 것으로' in n for n in r.notes)
+
+
+@pytest.mark.parametrize(
+    'profile',
+    [
+        None,  # 사용자 정보 없음
+        {
+            'default_costs': {'move_possible': False, 'move_housing': {'value': 450_000}}
+        },  # 이사 안 함
+        {'default_costs': {}},  # 이사할 집 주거비 없음
+    ],
+)
+def test_housing_aid_note_only_when_aid_was_subtracted(profile):
+    """남는 돈에서 주거지원비를 실제로 뺐을 때만 '계속 받는 것으로 계산했어요'라고 알린다."""
+    row = row_of('down_naju')
+    row.annual_salary_krw.value = 38_000_000
+    row.housing_allowance_months.value = None
+    user = UserProfile.model_validate(profile) if profile is not None else None
+    assert not any('주거지원비' in n for n in monthly_remaining(row, user).notes)
+
+
 def test_housing_allowance_never_makes_housing_negative():
     row = row_of('down_naju')
     profile = UserProfile.model_validate({'default_costs': {'move_housing': {'value': 150_000}}})

@@ -333,6 +333,35 @@ def test_temporary_housing_support_gives_after_support_answer():
     assert_is_break_even(plain, profile, move.annual_salary_krw, 2_000_000, case='move')
 
 
+@pytest.mark.parametrize(
+    ('months', 'excluded', 'note'),
+    [
+        (None, True, '지원 기간을 몰라서'),  # 기간을 모르면 끝날 수 있다고 보고 뺀다
+        (0, False, None),  # 0개월 = 지원 없음
+    ],
+)
+def test_housing_support_period_unknown_or_zero(months, excluded, note):
+    _, ulsan = rows()
+    ulsan.housing_allowance_monthly_krw.value = 300_000
+    ulsan.housing_allowance_months.value = months
+    p = {**user_b_profile(), 'target_monthly_remaining': 2_000_000}
+    p['postings']['ulsan'] = {
+        'commute_possible': False,
+        'move_housing': {'value': 500_000},
+        'move_transport': {'value': 50_000},
+    }
+    profile = UserProfile.model_validate(p)
+    baseline, _ = pick_baseline([], profile)
+    move = break_even(ulsan, profile, baseline).cases[1]
+    assert move.support_excluded is excluded
+    if excluded:
+        assert any(note in n for n in move.notes)
+        assert move.during_support_annual_salary_krw < move.annual_salary_krw
+    else:
+        assert move.during_support_annual_salary_krw is None
+        assert not any('주거지원비' in n for n in move.notes)
+
+
 def test_any_salary_enough_is_raised_to_minimum_wage():
     """기준이 너무 낮아 어떤 연봉이든 충분하면, '최소 120만 원' 대신 최저임금 연봉을 보여 준다."""
     profile = UserProfile.model_validate({**user_b_profile(), 'target_monthly_remaining': 0})
