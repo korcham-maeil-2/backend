@@ -26,6 +26,7 @@ Claude에 넘길 JSON을 만든다. 금액마다 자리표시를 붙인다: '{{A
 """
 
 import re
+from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -46,6 +47,12 @@ class Amounts:
     """
 
     values: dict[str, tuple[int, Kind]] = field(default_factory=dict)
+    # 금액 키 → 그 바로 뒤에 붙으면 안 되는 연봉 키. 최소 연봉일 때 세후 월급을 지원 받는 동안
+    # 연봉 뒤에 '이때 세후 월급은'으로 붙이는 실수가 첫 초안 9개 중 7개에서 나왔고, 검토(AI)는
+    # 이를 안정적으로 잡지 못했다 → 코드가 막는다 (check_draft)
+    not_after: dict[str, str] = field(default_factory=dict)
+    # 신뢰도가 '추정'인 남는 돈·최소 연봉의 키. 리포트가 하나라도 쓰면 '추정'이라고 밝혀야 한다
+    estimated: set[str] = field(default_factory=set)
 
     def ref(self, value: int | None, kind: Kind = 'other') -> str | None:
         """금액 → '{{A3}} = 196만 3,100원' (없으면 None)."""
@@ -54,6 +61,11 @@ class Amounts:
         key = f'A{len(self.values) + 1}'
         self.values[key] = (value, kind)
         return f'{{{{{key}}}}} = {won(value)}'
+
+
+def _key(ref: str) -> str:
+    """'{{A3}} = 196만원' → 'A3'."""
+    return ref[2 : ref.index('}}')]
 
 
 # 계산 결과 글 속 금액 ('가정값 60만원', '−12만 3,000원', '650,000원')
@@ -140,7 +152,8 @@ def _row_info(table: list[dict] | None, amounts: Amounts) -> dict[str, dict]:
         info[row.get('id')] = {
             '근무지': _text(place, amounts),
             '급여': salary,
-            '주거지원비': (
+            # 청년 지원(정부·지자체)과 섞지 않게 누가 주는 돈인지 붙인다
+            '주거지원비 (회사가 주는 돈, 청년 지원과 다름)': (
                 f'월 {amounts.ref(aid)}' + (f', {months}개월' if months else ', 기간 모름')
                 if aid
                 else None
@@ -158,15 +171,31 @@ def build_facts(
     rows = _row_info(table, amounts)
 
     postings = []
+    # 공고 ID → 리포트에 쓸 이름. ID는 넘기지 않는다 ('posting-1'이 리포트에 그대로 나왔다)
+    names = _names(result.get('postings', []), amounts)
     for p in result.get('postings', []):
         info = rows.get(p.get('posting_id'), {})
         cases = []
         for s in p.get('scenarios', []):
+            if not s.get('applicable', True):
+                # 해당 없는 경우는 이유만 (비용·신뢰도를 붙이면 계산한 것처럼 읽히고,
+                # 이유가 없으면 AI가 '거리가 멀어서' 같은 이유를 지어낸다)
+                cases.append(
+                    {
+                        '경우': _text(s.get('label'), amounts),
+                        '해당': False,
+                        '이유': _NOT_APPLICABLE.get(s.get('case'), '사용자가 해당 없다고 입력함'),
+                    }
+                )
+                continue
+            remaining = amounts.ref(s.get('monthly_remaining'), 'remaining')
+            if remaining and s.get('status') == 'estimated':
+                amounts.estimated.add(_key(remaining))
             cases.append(
                 {
                     '경우': _text(s.get('label'), amounts),
                     '해당': s.get('applicable', True),
-                    '매달 남는 돈': amounts.ref(s.get('monthly_remaining'), 'remaining'),
+                    '매달 남는 돈': remaining,
                     '남는 돈 신뢰도': _STATUS.get(s.get('status'), s.get('status')),
                     '주거비': _item(s.get('housing'), amounts),
                     '교통비': _item(s.get('transport'), amounts),
@@ -175,11 +204,10 @@ def build_facts(
             )
         postings.append(
             {
-                '공고': p.get('posting_id'),
-                '회사': _text(p.get('company'), amounts),
+                '회사': names[p.get('posting_id')],
                 '근무지': info.get('근무지'),
                 '급여': info.get('급여'),
-                '주거지원비': info.get('주거지원비'),
+                **{k: v for k, v in info.items() if k.startswith('주거지원비')},
                 '세후 월급': _item(p.get('net_income'), amounts),
                 # 연봉과 따로 받는 돈(별도 식대 + 수당). 예전 결과엔 없어서 수당 합계로 대신한다
                 '연봉 외로 따로 받는 돈': _item(p.get('pay_on_top'), amounts)
@@ -194,32 +222,62 @@ def build_facts(
     for be in result.get('break_even', []):
         base = be.get('baseline') or {}
         label = _text(base.get('label'), amounts)
+        for posting_id, name in names.items():  # 회사명이 없으면 기준 이름에 공고 ID가 들어 있다
+            if label and posting_id:  # 'posting-1'이 'posting-10'의 앞부분을 바꾸지 않게
+                label = re.sub(rf'{re.escape(posting_id)}(?!\d)', name, label)
         base_amount = amounts.ref(base.get('monthly_remaining'), 'remaining')
         cases = []
         for c in be.get('cases', []):
+            if c.get('reason') == '해당 없는 경우':
+                continue  # 공고 쪽 '경우별'에 이유와 함께 있다
+            # 최소 연봉에 딸린 값(세후 월급 등)은 최소 연봉 바로 뒤에 '최소 연봉일 때'로 붙인다.
+            # '그 연봉일 때'로 지원 중 최소 연봉 뒤에 두면 AI가 지원 중 연봉의 월급으로 붙였다.
+            case = {
+                '경우': _text(c.get('label'), amounts),
+                '최소 연봉': amounts.ref(c.get('annual_salary_krw'), 'salary'),
+                # 기준·비용 중 가장 약한 신뢰도 (가정값 주거비에 기대면 '추정')
+                '신뢰도': (
+                    _STATUS.get(c.get('status'), c.get('status'))
+                    if c.get('annual_salary_krw') is not None
+                    else None
+                ),
+                '최소 연봉일 때 세후 월급': amounts.ref(c.get('net_income_krw')),
+                # 최소 연봉에는 따로 받는 식대·수당이 빠져 있다 (출처 문장에 들어 있다)
+                '최소 연봉일 때 세후 월급 계산': _text(c.get('net_income_source'), amounts),
+            }
+            if case['최소 연봉'] and c.get('status') == 'estimated':
+                amounts.estimated.add(_key(case['최소 연봉']))
+            # 만원 단위로 올린 연봉이라 기준과 몇백 원 차이 나는 금액을 함께 주면 AI가
+            # '기준과 같은 금액'이라며 둘을 섞는다 → 최저임금으로 올린 경우처럼 크게 다를 때만
+            left = c.get('monthly_remaining')
+            base_left = base.get('monthly_remaining')
+            if isinstance(left, int) and (
+                not isinstance(base_left, int) or left - base_left >= _SAME_AS_BASE
+            ):
+                case['최소 연봉일 때 매달 남는 돈 (기준보다 많음)'] = amounts.ref(left, 'remaining')
+            during = amounts.ref(c.get('during_support_annual_salary_krw'), 'salary')
+            if during and case['최소 연봉일 때 세후 월급']:
+                amounts.not_after[_key(case['최소 연봉일 때 세후 월급'])] = _key(during)
             cases.append(
-                {
-                    '경우': _text(c.get('label'), amounts),
-                    '최소 연봉': amounts.ref(c.get('annual_salary_krw'), 'salary'),
-                    '지원 받는 동안 최소 연봉': amounts.ref(
-                        c.get('during_support_annual_salary_krw'), 'salary'
-                    ),
-                    '그 연봉일 때 매달 남는 돈': amounts.ref(
-                        c.get('monthly_remaining'), 'remaining'
-                    ),
-                    '그 연봉일 때 세후 월급': amounts.ref(c.get('net_income_krw')),
-                    # 최소 연봉에는 따로 받는 식대·수당이 빠져 있다 (출처 문장에 들어 있다)
-                    '그 연봉일 때 세후 월급 계산': _text(c.get('net_income_source'), amounts),
+                case
+                | {
                     '최저임금으로 올림': c.get('floor') == 'minimum_wage',
+                    '지원 받는 동안 최소 연봉 (이때의 세후 월급은 따로 없음)': during,
                     '못 구한 이유': _text(c.get('reason'), amounts),
                     '안내': _texts(c.get('notes'), amounts),
                 }
             )
         break_even.append(
             {
-                '회사': _text(be.get('company'), amounts),
+                '회사': names.get(be.get('posting_id')) or _text(be.get('company'), amounts),
                 '기준': (
-                    {'경우': label, '매달 남는 돈': base_amount} if label or base_amount else None
+                    {
+                        '경우': label,
+                        '매달 남는 돈': base_amount,
+                        '신뢰도': _STATUS.get(base.get('status'), base.get('status')),
+                    }
+                    if label or base_amount
+                    else None
                 ),
                 '경우별': cases,
             }
@@ -244,7 +302,41 @@ def build_facts(
         '근무지별 청년 지원 (남는 돈 계산에는 넣지 않음)': _support(local_support, amounts),
         '계산하지 못한 부분': _texts(result.get('errors'), amounts),
     }
+    # 청년 지원을 찾지 않았으면 칸을 빼서, '조건을 확인하세요' 같은 안내를 쓰지 않게 한다
+    if facts['근무지별 청년 지원 (남는 돈 계산에는 넣지 않음)'] is None:
+        del facts['근무지별 청년 지원 (남는 돈 계산에는 넣지 않음)']
     return facts, amounts
+
+
+# 해당 없는 경우의 이유 (계산은 사용자가 고른 대로만 뺀다: commute_possible·move_possible=False)
+_NOT_APPLICABLE = {
+    'commute': '사용자가 지금 집에서 통근할 수 없다고 입력함',
+    'move': '사용자가 이사를 고려하지 않는다고 입력함',
+}
+_SAME_AS_BASE = 10_000  # 최소 연봉일 때 남는 돈이 기준보다 이만큼 이상 많을 때만 따로 넘긴다
+
+
+def _names(postings: list[dict], amounts: Amounts) -> dict[str, str]:
+    """공고 ID → 리포트에 쓸 이름. 같은 회사 공고가 둘 이상이면 몇 번째 공고인지 붙여 구분한다."""
+    names = {
+        p.get('posting_id'): _text(p.get('company'), amounts) or f'공고 {i}'
+        for i, p in enumerate(postings, start=1)
+    }
+    counts = Counter(names.values())
+    return {
+        posting_id: f'{name} ({i}번째 공고)' if counts[name] > 1 else name
+        for i, (posting_id, name) in enumerate(names.items(), start=1)
+    }
+
+
+_ESTIMATE_WORD = re.compile(r'추정|가정')
+
+
+def missing_estimate_word(draft: str, amounts: Amounts) -> bool:
+    """추정인 남는 돈·최소 연봉을 썼는데 '추정'(또는 '가정')이라는 말이 한 번도 없는가."""
+    if _ESTIMATE_WORD.search(draft):
+        return False
+    return any(r.key in amounts.estimated for r in _refs(draft, amounts) if r.key)
 
 
 def _support(local_support: dict | None, amounts: Amounts) -> dict | None:
@@ -252,7 +344,7 @@ def _support(local_support: dict | None, amounts: Amounts) -> dict | None:
     if not local_support:
         return None
     status = {
-        'open': '신청 중',
+        'open': '접수 중',  # '신청 중'은 사용자가 신청한 것처럼 읽힌다
         'always': '상시',
         'upcoming': '곧 시작',
         'unknown': '기간 확인 필요',
@@ -268,7 +360,8 @@ def _support(local_support: dict | None, amounts: Amounts) -> dict | None:
         '지역별': [
             {
                 '지역': _text(r.get('region'), amounts),
-                '신청할 수 있는 지역 정책 수': r.get('matched', 0),
+                # '신청할 수 있는'은 받을 수 있다는 단정처럼 읽힌다 (조건은 신청 전에 확인)
+                '조건이 맞을 수 있는 지역 정책 수 (신청 전 확인 필요)': r.get('matched', 0),
                 '예시': top(r.get('policies') or []),
                 '조회 실패': _text(r.get('error'), amounts),
             }
@@ -292,6 +385,8 @@ _LITERAL_MONEY = re.compile(
     r'|(?<![\d,.])\d{5,}'
 )
 _URL = re.compile(r'https?://\S+')
+_ZERO = re.compile(r'0[ \t]*원')
+_NUMBER_END = re.compile(r'[\d,.]$')
 _DEFICIT = re.compile(r'적자|모자[라랍란]|부족')
 _SURPLUS = re.compile(r'남[아습는았을]|여유|흑자')
 _AFTER = 15  # 자리표시 뒤 몇 글자까지 '남아요·모자라요'를 볼지
@@ -305,6 +400,7 @@ class _Ref:
     value: int | None = None  # 넣을 금액 (부호 포함, '|절대'면 크기만)
     raw: int | None = None  # 원래 금액 (부호 검사용)
     kind: Kind | None = None
+    key: str | None = None  # 금액 하나를 쓴 자리표시의 키 (차이는 None)
     diff: bool = False
     rough: bool = False
     error: str | None = None
@@ -332,7 +428,7 @@ def _refs(draft: str, amounts: Amounts) -> list[_Ref]:
                 continue
             ref.value, ref.diff, ref.kind = abs(va - vb), True, ka
         else:
-            ref.value, ref.raw, ref.kind = (abs(va) if absolute else va), va, ka
+            ref.value, ref.raw, ref.kind, ref.key = (abs(va) if absolute else va), va, ka, a
     return refs
 
 
@@ -352,7 +448,11 @@ def check_draft(draft: str, amounts: Amounts) -> list[str]:
     bare = _URL.sub(' ', _PLACEHOLDER.sub(' ', draft))  # 주소 속 숫자는 금액이 아니다
     if '{{' in bare or '}}' in bare:
         problems.append('자리표시 괄호가 덜 닫혔어요. {{A1}}처럼 써 주세요')
+    has_zero = any(v == 0 for v, _ in amounts.values.values())
     for m in _LITERAL_MONEY.finditer(bare):
+        if has_zero and _ZERO.fullmatch(m.group(0)) and not _NUMBER_END.search(bare[: m.start()]):
+            # '교통비는 0원으로 계산했어요': 틀릴 숫자가 없다 (어디에 붙였는지는 검토가 본다)
+            continue
         problems.append(
             f"'{m.group(0).strip()}'처럼 금액을 숫자로 직접 썼어요. "
             '금액은 JSON의 자리표시({{A1}} 등)로만 써 주세요'
@@ -368,12 +468,34 @@ def check_draft(draft: str, amounts: Amounts) -> list[str]:
                 problems.append(f"'{r.text}'는 매달 모자라는 금액인데 그렇게 쓰지 않았어요")
         elif r.raw < 0 and _SURPLUS.search(after) and not _DEFICIT.search(after):
             problems.append(f"'{r.text}'는 마이너스(매달 모자람)인데 남는다고 썼어요")
+    problems += _wrong_neighbors(draft, refs, amounts)
     return list(dict.fromkeys(problems))
 
 
-# 금액은 늘 '원'(받침 있음)으로 끝난다 → 자리표시 바로 뒤 조사를 받침에 맞춘다 ('11만원를' → '을')
-_PARTICLE = re.compile(r'(를|가|는|와)(?![가-힣])')
-_FIXED = {'를': '을', '가': '이', '는': '은', '와': '과'}
+def _wrong_neighbors(draft: str, refs: list[_Ref], amounts: Amounts) -> list[str]:
+    """금액이 붙으면 안 되는 연봉 뒤에 왔는지: 바로 앞 연봉 자리표시를 본다 (Amounts.not_after).
+
+    사이에 '최소 연봉'이라고 다시 밝혔으면 맞게 쓴 것이다 ('… 최소 연봉일 때 세후 월급은 {{A27}}').
+    """
+    problems, last_salary, last_end = [], None, 0
+    for r in refs:
+        if r.error or r.key is None:
+            continue
+        banned = amounts.not_after.get(r.key)
+        if banned and last_salary == banned and '최소 연봉' not in draft[last_end : r.start]:
+            problems.append(
+                f"'{r.text}'는 최소 연봉일 때의 세후 월급이에요. 지원 받는 동안 연봉"
+                f"('{{{{{banned}}}}}') 뒤에 붙이지 말고 최소 연봉 바로 뒤에 써 주세요"
+            )
+        if r.kind == 'salary':
+            last_salary, last_end = r.key, r.end
+    return problems
+
+
+# 금액은 늘 '원'(받침 있음)으로 끝난다 → 자리표시 바로 뒤 조사를 받침에 맞춘다
+# ('11만원를' → '을', '5만원로' → '으로', '5만원로도' → '으로도')
+_PARTICLE = re.compile(r'(를|가|는|와)(?![가-힣])|로(?=(?:도|만|는|부터)?(?![가-힣]))')
+_FIXED = {'를': '을', '가': '이', '는': '은', '와': '과', '로': '으로'}
 
 
 def render(draft: str, amounts: Amounts) -> str:
@@ -385,7 +507,7 @@ def render(draft: str, amounts: Amounts) -> str:
         out += [draft[pos : r.start], _format(r.value, r.rough)]
         pos = r.end
         if m := _PARTICLE.match(draft, pos):
-            out.append(_FIXED[m.group(1)])
+            out.append(_FIXED[m.group(0)])
             pos = m.end()
     out.append(draft[pos:])
     return ''.join(out)

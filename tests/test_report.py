@@ -15,7 +15,7 @@ import logging
 import pytest
 from conftest import FakeExtractor, scenario_llm, scenario_text
 from fastapi.testclient import TestClient
-from test_demo_scenarios import profile_a
+from test_demo_scenarios import FLOWS, profile_a, run_flow
 from test_normalize import FakeMessages, fake_client, reply
 
 from backend.calc.summary import calculate_all
@@ -29,6 +29,14 @@ from backend.report import (
     ClaudeWriter,
     ReportAgent,
     ReportError,
+)
+from backend.report.agent import (
+    CONTENT_RULES,
+    NO_ESTIMATE,
+    REVIEWER_SYSTEM,
+    RULES,
+    WRITER_SYSTEM,
+    Finding,
 )
 from backend.report.facts import MAX_TEXT, Amounts, build_facts, check_draft, render
 
@@ -82,6 +90,9 @@ PANGYO = amounts_of(
             '59만원을 쓰고 196만 3,100원이 남고, 200만 1,100원은 59만원과',
         ),
         ('{{A3}}가량', '59만원가량'),  # 조사가 아닌 말은 그대로
+        ('{{A3}}로 잡았어요', '59만원으로 잡았어요'),
+        ('{{A3}}로도 충분해요', '59만원으로도 충분해요'),
+        ('{{A3}}로서', '59만원로서'),  # 조사가 아닌 말은 그대로
     ],
 )
 def test_render_fills_exact_amounts(draft, text):
@@ -148,6 +159,69 @@ def test_negative_remaining_sign():
     assert check_draft('매달 {{A1|절대}}이 남아요.', deficit)
     assert check_draft('매달 {{A1}}이 남아요.', deficit)
     assert check_draft('매달 남는 돈은 {{A1}}이에요.', deficit) == []
+
+
+def test_zero_won_passes_only_when_facts_have_zero():
+    """'0원으로 계산했어요'는 틀릴 숫자가 없다 → 자료에 0원이 있으면 숫자로 써도 된다."""
+    zero = amounts_of(A1=(0, 'other'), A2=(1_963_100, 'remaining'))
+    assert check_draft('교통비는 0원으로 계산했어요.', zero) == []
+    assert check_draft('교통비는 0 원이에요.', zero) == []
+    assert check_draft('교통비는 0원이에요.', PANGYO)  # 자료에 0원이 없다
+    assert check_draft('10원', zero) and check_draft('1,0원', zero)  # 0으로 끝나는 다른 수
+
+
+def test_break_even_facts_carry_confidence():
+    """최소 연봉이 가정값 주거비에 기대면 '추정'이라고 넘긴다 (작성·검토 규칙 2의 근거)."""
+    out, rows, _ = run_flow(*FLOWS[0][1:])
+    table = [r.model_dump(mode='json') for r in rows.values()]
+    facts, _ = build_facts(out, None, table)
+    [naju] = facts['연봉 비공개 공고의 최소 연봉']
+    assert naju['기준']['신뢰도'] == '추정'
+    [move] = naju['경우별']  # 해당 없는 통근은 공고 쪽 '경우별'에 이유와 함께만 있다
+    assert move['최소 연봉'] and move['신뢰도'] == '추정'
+    # 만원 단위로 올린 연봉이라 기준과 몇백 원 차이 나는 '최소 연봉일 때 남는 돈'은 넘기지 않는다
+    assert not any(k.startswith('최소 연봉일 때 매달 남는 돈') for k in move)
+
+
+def test_net_income_must_follow_minimum_salary_not_support_salary():
+    """최소 연봉일 때 세후 월급을 지원 받는 동안 연봉 뒤에 붙이면 코드가 막는다.
+
+    첫 초안 9개 중 7개가 이렇게 틀렸고, 검토(AI)는 두 모델 다 안정적으로 못 잡았다.
+    """
+    out, rows, _ = run_flow(*FLOWS[0][1:])
+    table = [r.model_dump(mode='json') for r in rows.values()]
+    facts, amounts = build_facts(out, None, table)
+    [move] = facts['연봉 비공개 공고의 최소 연봉'][0]['경우별']
+
+    def ref(text: str) -> str:
+        return text[: text.index('}}') + 2]
+
+    least, net = ref(move['최소 연봉']), ref(move['최소 연봉일 때 세후 월급'])
+    during = ref(move['지원 받는 동안 최소 연봉 (이때의 세후 월급은 따로 없음)'])
+    ok = f'최소 {least}이고 이때 세후 월급은 {net}이에요. 지원 받는 동안은 {during}이면 돼요.'
+    bad = f'최소 {least}이에요. 지원 받는 동안은 {during}이면 되고, 이때 세후 월급은 {net}이에요.'
+    # 지원 중 연봉 뒤라도 '최소 연봉일 때'라고 다시 밝히면 맞게 쓴 것이다
+    restated = f'지원 받는 동안은 {during}이면 돼요. 최소 연봉일 때 세후 월급은 {net}이에요.'
+    assert check_draft(ok, amounts) == []
+    assert check_draft(restated, amounts) == []
+    assert any('최소 연봉일 때의 세후 월급' in p for p in check_draft(bad, amounts))
+
+
+def test_same_company_postings_get_distinct_names():
+    """같은 회사 공고 둘: 공고 ID를 넘기지 않으니 몇 번째 공고인지 붙여 구분한다."""
+    state = pangyo_state()
+    posting = state['result']['postings'][0]
+    twin = json.loads(json.dumps(posting)) | {'posting_id': 'posting-2'}
+    state['result']['postings'].append(twin)
+    facts, _ = build_facts(state['result'], None, state['table'])
+    names = [p['회사'] for p in facts['공고별 매달 남는 돈']]
+    company = posting['company']
+    assert names == [f'{company} (1번째 공고)', f'{company} (2번째 공고)']
+
+
+def test_writer_and_reviewer_share_content_rules():
+    """규칙을 따로 두면 한쪽만 바뀌어, 규칙대로 쓴 리포트를 검토가 떨어뜨린다."""
+    assert CONTENT_RULES in WRITER_SYSTEM and CONTENT_RULES in REVIEWER_SYSTEM
 
 
 def test_every_amount_in_facts_has_a_placeholder():
@@ -238,10 +312,10 @@ def test_literal_amount_is_rewritten_with_feedback(caplog):
 
 
 def test_reviewer_problem_also_triggers_rewrite():
-    writer = FakeWriter('첫 초안', '고친 초안')
+    writer = FakeWriter('첫 초안 (추정)', '고친 초안 (추정)')
     reviewer = FakeReviewer(['청년 지원금을 남는 돈에 더했어요'], [])
     out = ReportAgent(writer, reviewer).run(pangyo_state())
-    assert out['report'] == '고친 초안'
+    assert out['report'] == '고친 초안 (추정)'
     assert writer.calls[1][1] == ['청년 지원금을 남는 돈에 더했어요']
 
 
@@ -262,10 +336,12 @@ def test_negative_remaining_user_gets_report():
     state['result'] = calculate_all(state['table'], state['user_profile'])
     assert remaining_of(state) < 0
     ref = ref_of(state).replace('}}', '|절대}}')
-    writer = FakeWriter(f'지금 집에서 다니면 매달 {ref}씩 모자라요.')
+    writer = FakeWriter(f'지금 집에서 다니면 매달 {ref}씩 모자라요. 이사 경우는 추정이에요.')
     out = ReportAgent(writer, FakeReviewer([])).run(state)
     assert out['report_check']['status'] == 'verified'
-    assert out['report'] == f'지금 집에서 다니면 매달 {won(-remaining_of(state))}씩 모자라요.'
+    assert out['report'] == (
+        f'지금 집에서 다니면 매달 {won(-remaining_of(state))}씩 모자라요. 이사 경우는 추정이에요.'
+    )
 
 
 def test_empty_draft_is_not_verified():
@@ -304,23 +380,129 @@ def test_claude_writer_request_and_rewrite_messages():
     assert '숫자 틀림' in second['messages'][2]['content']
 
 
+def check(rule='없는 사실', quote='거리가 멀어서', why='이유가 JSON에 없어요', verdict='위반'):
+    return {'rule': rule, 'quote': quote, 'why': why, 'verdict': verdict}
+
+
+def review_reply(*checks: dict):
+    return reply(json.dumps({'checks': list(checks)}, ensure_ascii=False))
+
+
 def test_claude_reviewer_uses_small_model_and_reads_json():
-    messages = FakeMessages(reply('{"problems": ["출처가 빠졌어요"]}'))
-    assert ClaudeReviewer(fake_client(messages))({}, '리포트') == ['출처가 빠졌어요']
+    messages = FakeMessages(review_reply(check()))
+    report = '나주는 거리가 멀어서 통근하지 않아요.'
+    [finding] = ClaudeReviewer(fake_client(messages))({}, report)
+    assert finding == Finding('없는 사실', '거리가 멀어서', '이유가 JSON에 없어요')
+    assert finding.blocking
+    assert str(finding) == "[없는 사실] '거리가 멀어서' → 이유가 JSON에 없어요"
     assert messages.calls[0]['model'] == REVIEW_MODEL == 'claude-haiku-5-5'
 
 
+def test_claude_reviewer_drops_non_violations_and_made_up_quotes(caplog):
+    """'문제 아님' 항목과, 리포트에 없는 글을 인용한 가벼운 지적은 다시 쓰게 하지 않는다."""
+    report = '- 판교는 매달 약 200만원(추정)이\n  남아요.'
+    messages = FakeMessages(
+        review_reply(
+            check(verdict='문제 아님', quote='약 200만원'),  # 스스로 문제가 아니라고 함
+            check(rule='빠진 값 안내', quote='세후 월급을 넣으면'),  # 리포트에 없는 글
+            # 띄어쓰기·줄바꿈·따옴표·목록 기호·줄임표 차이는 봐준다
+            check(rule='추정 표시', quote='"판교는 매달 약200만원 (추정)이 … 남아요"'),
+        )
+    )
+    with caplog.at_level(logging.WARNING):
+        findings = ClaudeReviewer(fake_client(messages))({}, report)
+    assert [f.rule for f in findings] == ['추정 표시']
+    assert '인용이 리포트에 없음' in caplog.text
+
+
+def test_claude_reviewer_keeps_blocking_finding_with_misquoted_text():
+    """막는 위반은 인용을 조금 틀리게 옮겨도 남긴다 (틀린 금액 설명을 통과시키지 않는다)."""
+    messages = FakeMessages(review_reply(check(rule='금액 귀속', quote='나주는 매달 200만원')))
+    [finding] = ClaudeReviewer(fake_client(messages))({}, '판교는 매달 200만원이 남아요.')
+    assert finding.blocking
+
+
 def test_claude_reviewer_asks_for_structured_output():
-    messages = FakeMessages(reply('{"problems": []}'))
+    messages = FakeMessages(review_reply())
     assert ClaudeReviewer(fake_client(messages))({}, '리포트') == []
     fmt = messages.calls[0]['output_config']['format']
     assert fmt['type'] == 'json_schema'
-    assert fmt['schema']['properties']['problems']['items'] == {'type': 'string'}
+    item = fmt['schema']['properties']['checks']['items']
+    assert item['properties']['rule']['enum'] == list(RULES)
+    assert item['required'] == ['rule', 'quote', 'why', 'verdict']
+
+
+def test_light_problems_get_one_rewrite_then_show():
+    """추정 표시·빠진 값 안내만 남으면 한 번 고치게 하고, 두 번째부터는 보여 준다 (숨기지 않음)."""
+    light = Finding('빠진 값 안내', '고친 초안', '세후 월급도 빠졌다고 알려야 해요')
+    writer = FakeWriter('첫 초안 (추정)', '고친 초안 (추정)')
+    out = ReportAgent(writer, FakeReviewer([light], [light])).run(pangyo_state())
+    assert out['report'] == '고친 초안 (추정)'
+    assert out['report_check'] == {
+        'status': 'verified',
+        'attempts': 2,
+        'problem_count': 1,
+        'reason': None,
+    }
+    assert writer.calls[1][1] == [str(light)]
+
+
+def test_blocking_problem_left_at_the_end_hides_report():
+    wrong = Finding('금액 귀속', '고친 초안', '판교 금액을 나주에 붙였어요')
+    writer = FakeWriter(*['초안 (추정)'] * MAX_ATTEMPTS)
+    out = ReportAgent(writer, FakeReviewer(*[[wrong]] * MAX_ATTEMPTS)).run(pangyo_state())
+    assert out['report'] is None
+    assert out['report_check']['status'] == 'unverified'
+
+
+def test_report_without_estimate_word_is_asked_to_say_so():
+    """추정인 금액(판교 이사)을 썼는데 '추정'이라는 말이 한 번도 없으면 코드가 먼저 알린다."""
+    state = pangyo_state()
+    move = ref_of(state, 'move')
+    writer = FakeWriter(f'이사하면 매달 {move}이 남아요.', f'이사하면 매달 {move}이 남아요 (추정).')
+    out = ReportAgent(writer, FakeReviewer([], [])).run(state)
+    assert out['report'] == f'이사하면 매달 {won(remaining_of(state, "move"))}이 남아요 (추정).'
+    assert writer.calls[1][1] == [NO_ESTIMATE]
+
+
+def test_estimate_word_not_needed_when_no_estimated_amount_is_used():
+    """추정인 금액을 쓰지 않았으면 '추정'이라는 말을 억지로 넣게 하지 않는다."""
+    state = pangyo_state()
+    writer = FakeWriter(f'지금 집에서 다니면 매달 {ref_of(state)}이 남아요.')
+    out = ReportAgent(writer, FakeReviewer([])).run(state)
+    assert out['report_check']['attempts'] == 1
+
+
+def test_facts_give_reason_for_not_applicable_case_and_skip_empty_support():
+    out, rows, _ = run_flow(*FLOWS[0][1:])
+    table = [r.model_dump(mode='json') for r in rows.values()]
+    facts, _ = build_facts(out, None, table)
+    naju = facts['공고별 매달 남는 돈'][1]
+    commute = naju['경우별'][0]
+    # 이유가 없으면 AI가 '거리가 멀어서'처럼 지어낸다 → 사용자가 고른 것이라고 적는다
+    assert commute == {
+        '경우': '지금 집에서 통근',
+        '해당': False,
+        '이유': '사용자가 지금 집에서 통근할 수 없다고 입력함',
+    }
+    assert '청년 지원' not in ' '.join(facts)  # 찾지 않았으면 칸을 뺀다
+    assert naju['주거지원비 (회사가 주는 돈, 청년 지원과 다름)']
+    # 내부 공고 ID는 넘기지 않는다 (리포트 10편 중 3편에 'posting-1'이 그대로 나왔다)
+    text = json.dumps(facts, ensure_ascii=False)
+    assert 'near_pangyo' not in text and 'down_naju' not in text
 
 
 @pytest.mark.parametrize(
     'answer',
-    ['문제 없어 보여요', '{"problems": "없음"}', '{"problems": null}', '{"problems": [1]}', '{}'],
+    [
+        '문제 없어 보여요',
+        '{"problems": []}',  # 예전 모양
+        '{"checks": "없음"}',
+        '{"checks": null}',
+        '{"checks": [1]}',
+        '{"checks": [{"rule": "없는 사실"}]}',
+        '{}',
+    ],
 )
 def test_claude_reviewer_bad_answer_is_an_error_not_a_pass(answer):
     messages = FakeMessages(reply(answer))
@@ -344,7 +526,7 @@ def _pangyo_profile() -> dict:
 
 def test_confirm_writes_verified_report_through_graph_loop(tmp_path):
     """확인하면 write_report → verify_report → (틀림) write_report → verify_report 순으로 돈다."""
-    writer = FakeWriter('매달 999만원이 남아요.', '판교 회사를 비교한 리포트예요.')
+    writer = FakeWriter('매달 999만원이 남아요.', '판교 회사를 비교한 리포트예요 (추정 포함).')
     with _client(tmp_path, ReportAgent(writer, FakeReviewer([]))) as c:
         sid = c.post('/sessions', json={'message': scenario_text('near_pangyo')}).json()[
             'session_id'
@@ -353,7 +535,7 @@ def test_confirm_writes_verified_report_through_graph_loop(tmp_path):
             f'/sessions/{sid}/confirm', json={'approved': True, 'profile': _pangyo_profile()}
         ).json()
         assert done['status'] == 'completed'
-        assert done['report'] == '판교 회사를 비교한 리포트예요.'
+        assert done['report'] == '판교 회사를 비교한 리포트예요 (추정 포함).'
         assert done['report_check']['status'] == 'verified'
         assert done['report_check']['attempts'] == 2
         assert done['report_check']['problem_count'] == 0
@@ -361,7 +543,7 @@ def test_confirm_writes_verified_report_through_graph_loop(tmp_path):
 
 
 def test_recalculate_rewrites_report_only_when_numbers_change(tmp_path):
-    writer = FakeWriter('첫 리포트', '다시 계산한 리포트')
+    writer = FakeWriter('첫 리포트 (추정)', '다시 계산한 리포트 (추정)')
     with _client(tmp_path, ReportAgent(writer, FakeReviewer([], []))) as c:
         sid = c.post('/sessions', json={'message': scenario_text('near_pangyo')}).json()[
             'session_id'
@@ -369,14 +551,14 @@ def test_recalculate_rewrites_report_only_when_numbers_change(tmp_path):
         c.post(f'/sessions/{sid}/confirm', json={'approved': True, 'profile': _pangyo_profile()})
         # 아무것도 안 고치고 다시 계산 → 예전 리포트 그대로 (Claude 호출 없음)
         same = c.post(f'/sessions/{sid}/recalculate', json={'profile': _pangyo_profile()}).json()
-        assert same['report'] == '첫 리포트'
+        assert same['report'] == '첫 리포트 (추정)'
         assert len(writer.calls) == 1
         # 고정비를 고치면 숫자가 바뀌므로 다시 쓴다
         changed = _pangyo_profile()
         changed['fixed_expenses'] = [{'name': '보험', 'monthly_krw': 100_000}]
         again = c.post(f'/sessions/{sid}/recalculate', json={'profile': changed}).json()
         assert again['status'] == 'completed'
-        assert again['report'] == '다시 계산한 리포트'
+        assert again['report'] == '다시 계산한 리포트 (추정)'
         assert len(writer.calls) == 2
 
 

@@ -111,6 +111,12 @@ def create_message(
     if response.stop_reason == 'refusal':
         raise error(failure.refusal)
     if response.stop_reason == 'max_tokens':
+        usage = getattr(response, 'usage', None)
+        logger.warning(
+            '[%s] 답이 max_tokens에서 잘림 (출력 %s토큰)',
+            failure.task,
+            getattr(usage, 'output_tokens', '?'),
+        )
         raise error(failure.too_long)
     return response
 
