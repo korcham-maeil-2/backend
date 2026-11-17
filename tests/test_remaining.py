@@ -281,6 +281,60 @@ def test_monthly_salary_posting():
     assert r.net_income.status == 'estimated'  # 월급 칸이 추정이면 결과도 추정
 
 
+def test_net_income_source_names_pay_on_top():
+    """세후 월급 출처에 연봉 외로 더한 돈(별도 식대·수당)도 적는다.
+
+    빼면 '연봉은 더 적은데 세후 월급은 더 많다'가 화면에서 설명되지 않는다.
+    """
+    r = monthly_remaining(row_of('near_pangyo'), None)
+    assert r.net_income.source == (
+        '연봉 3,600만원 ÷ 12 + 식대 20만원 + 통신비 5만원 → 4대보험·소득세를 뺀 값'
+    )
+    # 세전 월급(325만) = 연봉 ÷ 12(300만) + 연봉 외로 따로 받는 돈(25만)
+    assert r.pay_on_top.value == 250_000
+    assert r.pay_on_top.label == '연봉 외'
+    assert r.pay_on_top.source == '식대 20만원 + 통신비 5만원'
+    assert r.payslip['gross'] == 3_000_000 + r.pay_on_top.value
+
+
+def test_meal_in_salary_is_not_pay_on_top():
+    """식대가 연봉에 포함이거나(True) 포함인지 모르면(None) 따로 받는 돈이 아니다."""
+    for in_salary in (True, None):
+        row = row_of('near_pangyo')
+        row.meal_allowance_in_salary.value = in_salary
+        r = monthly_remaining(row, None)
+        assert r.pay_on_top.value == 50_000  # 통신비만
+        assert r.net_income.source.startswith('연봉 3,600만원 ÷ 12 + 통신비 5만원 →')
+        assert r.payslip['gross'] == 3_000_000 + 50_000
+
+
+def test_unknown_meal_in_salary_is_explained():
+    """식대가 연봉에 포함인지 모르면 포함으로 계산하고, 그렇게 했다고 알린다."""
+    row = row_of('near_pangyo')
+    row.meal_allowance_in_salary.value = None
+    r = monthly_remaining(row, None)
+    assert any('포함인지 몰라' in n for n in r.notes)
+
+
+def test_old_saved_result_without_pay_on_top_still_validates():
+    """pay_on_top이 생기기 전에 저장된 결과도 읽힌다 (세션 조회에서 결과가 사라지지 않게)."""
+    from backend.calc.summary import CalculationResult
+
+    saved = calculate_all([row_of('near_pangyo')], None)  # 세션에 저장되는 dict 모양
+    for p in saved['postings']:
+        del p['pay_on_top']
+    assert CalculationResult.model_validate(saved).postings[0].pay_on_top is None
+
+
+def test_no_pay_on_top_keeps_short_source():
+    row = row_of('near_pangyo')
+    row.meal_allowance_in_salary.value = True
+    row.other_allowances = []
+    r = monthly_remaining(row, None)
+    assert r.pay_on_top.value == 0
+    assert r.net_income.source == '연봉 3,600만원 ÷ 12 → 4대보험·소득세를 뺀 값'
+
+
 def test_meals_provided_removes_meal_exemption():
     """식사를 현물로 주면 현금 식대는 과세 (across_gwangju expected.json 메모와 같은 규칙)."""
     row = row_of('near_pangyo')

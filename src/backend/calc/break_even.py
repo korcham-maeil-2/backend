@@ -88,6 +88,13 @@ class BreakEvenCase(OutputModel):
     net_income_krw: int | None = Field(
         default=None, description='그 연봉일 때의 세후 월급 (화면이 거꾸로 계산하지 않게)'
     )
+    net_income_source: str | None = Field(
+        default=None,
+        description=(
+            '그 연봉일 때 세후 월급을 어떻게 계산했는지 '
+            '(별도 식대·수당 포함, 화면이 문장을 만들지 않게)'
+        ),
+    )
     housing: Item | None = Field(
         default=None, description='이 답에 쓴 주거비 (주거지원비가 끝난 뒤 기준)'
     )
@@ -341,6 +348,7 @@ def _search(
         annual_salary_krw=step * STEP_KRW,
         monthly_remaining=found.monthly_remaining,
         net_income_krw=found_result.net_income.value,
+        net_income_source=found_result.net_income.source,
         housing=found.housing,
         transport=found.transport,
         status=status,
