@@ -214,6 +214,14 @@ class PostingResult(OutputModel):
     allowances: Item = Field(
         description='회사 수당 합계 (교통비·통신비 등). 세후 월급에 이미 들어 있음'
     )
+    # 기본값이 있어야 이 칸이 생기기 전에 저장된 세션도 검증을 통과한다 (api/sessions.py)
+    pay_on_top: Item | None = Field(
+        default=None,
+        description=(
+            '연봉·월급과 따로 매달 받는 돈 (별도 지급 식대 + 수당). 세후 월급에 이미 들어 있음. '
+            '연봉만 보고 비교하면 헷갈리므로 화면이 따로 알린다'
+        ),
+    )
     fixed_expenses: Item
     scenarios: list[Scenario]
     notes: list[str] = Field(default_factory=list)
@@ -239,7 +247,8 @@ MIN_MONTHLY_BASE = 100_000
 def _allowances(row: ComparisonRow) -> Item:
     """회사가 매달 주는 수당 합계 (교통비 + 기타 수당). 주거지원비는 이사 경우에만 따로 쓴다."""
     cells = [row.transport_allowance_monthly_krw] + [a.monthly_krw for a in row.other_allowances]
-    names = ['교통비'] + [a.name for a in row.other_allowances]
+    # '교통비'만 쓰면 표의 교통비(내가 쓰는 돈)와 헷갈린다 → 회사가 주는 돈은 '교통비 수당'
+    names = ['교통비 수당'] + [a.name for a in row.other_allowances]
     present = [(n, c) for n, c in zip(names, cells, strict=True) if c.value]
     if not present:
         return Item(label='회사 수당', value=0, status='confirmed', source='공고에 월 수당 없음')
@@ -248,6 +257,41 @@ def _allowances(row: ComparisonRow) -> Item:
         value=sum(c.value for _, c in present),
         status=weakest([_status_of(c) for _, c in present]),
         source=' + '.join(f'{n} {won(c.value)}' for n, c in present),
+    )
+
+
+def _meal_on_top(row: ComparisonRow) -> int:
+    """연봉과 따로 주는 식대 (원).
+
+    연봉에 포함인지 모르면 '포함'으로 본다 (실수령액이 적게 나오는 쪽 = 보수적).
+    """
+    meal = row.meal_allowance_monthly_krw.value or 0
+    return meal if row.meal_allowance_in_salary.value is False else 0
+
+
+def _pay_on_top(row: ComparisonRow, allowances: Item) -> Item:
+    """연봉·월급과 따로 매달 받는 돈 = 별도 식대 + 수당.
+
+    세전 월급(gross)에 더해지는 바로 그 금액이다.
+    """
+    meal = _meal_on_top(row)
+    parts = ([f'식대 {won(meal)}'] if meal else []) + (
+        [allowances.source] if allowances.value else []
+    )
+    statuses = [allowances.status]
+    if meal:  # 식대 금액과 '연봉과 별도'라는 판단 둘 다 이 금액의 신뢰도다
+        statuses += [
+            _status_of(row.meal_allowance_monthly_krw),
+            _status_of(row.meal_allowance_in_salary),
+        ]
+    # 화면이 '연봉 외 …' / '월급 외 …'를 다시 판단하지 않게, 계산에 쓴 급여 칸으로 정한다
+    picked = _salary_cell(row)
+    kind = '월급' if picked and picked[0] == 'monthly' else '연봉'
+    return Item(
+        label=f'{kind} 외',
+        value=meal + allowances.value,
+        status=weakest(statuses),
+        source=' + '.join(parts) if parts else f'{kind} 외로 따로 받는 돈 없음',
     )
 
 
@@ -268,7 +312,7 @@ def _monthly_base(kind: str, cell: MoneyCell) -> int:
 
 
 def _net_income(
-    row: ComparisonRow, profile: UserProfile, allowances: Item
+    row: ComparisonRow, profile: UserProfile, allowances: Item, on_top: Item
 ) -> tuple[Item, Payslip | None, list[str]]:
     """공고의 급여 칸으로 세후 월급을 계산한다. 금액이 없으면 missing.
 
@@ -302,9 +346,13 @@ def _net_income(
         ]
         if row.meals_provided.value is True:  # 비과세 여부를 바꾸므로 신뢰도에 넣는다
             used.append(_status_of(row.meals_provided))
-    meal_in_salary = in_salary.value is not False
-
-    gross = base + (0 if meal_in_salary else meal_krw) + allowances.value
+        if in_salary.value is None:  # 화면에 '포함으로 봤다'는 걸 숨기지 않는다
+            notes.append(
+                '식대가 연봉에 포함인지 몰라 포함된 것으로 계산했어요. 따로 받으면 더 남아요.'
+            )
+    gross = (
+        base + on_top.value
+    )  # on_top = 별도 식대 + 수당 (_pay_on_top, 화면에도 같은 값을 보낸다)
     if row.meals_provided.value is True:
         nontaxable = 0  # 식사를 현물로 주면 현금 식대는 과세
         if meal_krw:
@@ -318,6 +366,10 @@ def _net_income(
 
     slip = monthly_net(gross, nontaxable, profile.family, profile.children_8_to_20)
     what = f'연봉 {won(cell.value)} ÷ 12' if kind == 'annual' else f'월급 {won(cell.value)}'
+    # 세전 월급에 더한 것(별도 식대·수당)도 적는다.
+    # 빼면 '연봉은 적은데 세후가 더 많다'가 설명되지 않는다.
+    if on_top.value:
+        what = f'{what} + {on_top.source}'
     source = f'{what} → 4대보험·소득세를 뺀 값'
     return Item(label=label, value=slip.net, status=weakest(used), source=source), slip, notes
 
@@ -459,9 +511,10 @@ def monthly_remaining(row: ComparisonRow, profile: UserProfile | None) -> Postin
     월 잔여액은 null, missing에 필요한 값을 적는다.
     """
     allowances = _allowances(row)
+    on_top = _pay_on_top(row, allowances)
     notes: list[str] = []
     try:
-        net, slip, net_notes = _net_income(row, profile or UserProfile(), allowances)
+        net, slip, net_notes = _net_income(row, profile or UserProfile(), allowances, on_top)
         notes = _notes(row) + net_notes
     except ValueError:  # 간이세액표 범위 밖 등 — 입력 검사로 막혀 있지만, 와도 계산은 계속한다
         # 예외 글은 개발자용(합쇼체·원 단위 숫자)이라 화면에는 정해 둔 문장만 보낸다.
@@ -508,6 +561,7 @@ def monthly_remaining(row: ComparisonRow, profile: UserProfile | None) -> Postin
         net_income=net,
         payslip=slip.to_dict() if slip else None,
         allowances=allowances,
+        pay_on_top=on_top,
         fixed_expenses=base[1],
         scenarios=[commute, move],
         notes=notes,

@@ -181,7 +181,9 @@ def build_facts(
                 '급여': info.get('급여'),
                 '주거지원비': info.get('주거지원비'),
                 '세후 월급': _item(p.get('net_income'), amounts),
-                '수당': amounts.ref((p.get('allowances') or {}).get('value')),
+                # 연봉과 따로 받는 돈(별도 식대 + 수당). 예전 결과엔 없어서 수당 합계로 대신한다
+                '연봉 외로 따로 받는 돈': _item(p.get('pay_on_top'), amounts)
+                or amounts.ref((p.get('allowances') or {}).get('value')),
                 '고정비 합계': amounts.ref((p.get('fixed_expenses') or {}).get('value')),
                 '경우별': cases,
                 '안내': _texts(p.get('notes'), amounts),
@@ -206,6 +208,8 @@ def build_facts(
                         c.get('monthly_remaining'), 'remaining'
                     ),
                     '그 연봉일 때 세후 월급': amounts.ref(c.get('net_income_krw')),
+                    # 최소 연봉에는 따로 받는 식대·수당이 빠져 있다 (출처 문장에 들어 있다)
+                    '그 연봉일 때 세후 월급 계산': _text(c.get('net_income_source'), amounts),
                     '최저임금으로 올림': c.get('floor') == 'minimum_wage',
                     '못 구한 이유': _text(c.get('reason'), amounts),
                     '안내': _texts(c.get('notes'), amounts),

@@ -115,6 +115,10 @@ def test_ulsan_break_even_against_seoul():
     # 세금·보험료가 그만큼 더 나가서 울산은 4,000만 원보다 조금 더 받아야 같은 돈이 남는다.
     assert 40_000_000 < annual < 41_000_000
     assert commute.status == 'estimated'  # 기준(서울 월세 추정)의 신뢰도를 따른다
+    # 그 연봉일 때 세후 월급을 어떻게 계산했는지도 보낸다 (화면이 문장을 따로 만들지 않게)
+    assert commute.net_income_source == (
+        f'연봉 {annual // 10_000:,}만원 ÷ 12 → 4대보험·소득세를 뺀 값'
+    )
 
 
 def test_calculate_all_includes_break_even_only_for_undisclosed():
