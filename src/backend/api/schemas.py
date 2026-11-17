@@ -23,6 +23,7 @@ from backend.calc.summary import CalculationResult
 from backend.inputs.limits import MAX_MESSAGE_CHARS
 from backend.inputs.read import InputKind, ReadMethod
 from backend.normalize.schema import ComparisonRow
+from backend.plan import SettlePlan
 from backend.report import ReportCheck
 from backend.support import LocalSupport
 
@@ -143,4 +144,11 @@ class SessionResponse(BaseModel):
     )
     report_check: ReportCheck | None = Field(
         default=None, description='리포트 검증 결과 (통과·다시 써도 실패·쓰지 못함·꺼짐)'
+    )
+    plan: SettlePlan | None = Field(
+        default=None,
+        description=(
+            '1년 정착 플랜 (공고마다 이사 전·이사한 달·달마다 할 일). 계산 결과가 있을 때만. '
+            '계산 결과·청년 지원에서 바로 만들어 따로 저장하지 않는다'
+        ),
     )
