@@ -200,6 +200,10 @@ class Scenario(OutputModel):
     housing: Item
     transport: Item
     missing: list[str] = Field(default_factory=list, description='계산에 필요한데 없는 값')
+    assumed_zero: list[str] = Field(
+        default_factory=list,
+        description='비어 있어 0원으로 놓고 계산한 값 (예: 교통비). 실제로는 더 들 수 있다',
+    )
 
 
 class PostingResult(OutputModel):
@@ -340,6 +344,22 @@ def _from_cost(label: str, cost: Cost | None, missing_source: str) -> Item:
     return Item(label=label, value=cost.value, status=cost.status, source=cost.source)
 
 
+BLANK_TRANSPORT = '비어 있어 0원으로 계산했어요. 교통비가 더 들 수 있어요'
+
+
+def _transport(label: str, cost: Cost | None) -> Item:
+    """교통비. 비어 있으면 0원으로 놓고 계산한다 (추정) — 교통비 하나 때문에 남는 돈을 못 보는 일을
+    막는다. 실제로는 더 들 수 있다고 Scenario.assumed_zero로 알린다."""
+    if cost is None:
+        return Item(
+            label=label,
+            value=0,
+            status='estimated',
+            source=BLANK_TRANSPORT,
+        )
+    return _from_cost(label, cost, '')
+
+
 def housing_aid(row: ComparisonRow) -> tuple[int, int | None] | None:
     """주거지원비 (월 금액, 지원 개월 수 — 모르면 None). 지원이 없으면 None.
 
@@ -416,6 +436,7 @@ def _scenario(
         housing=housing,
         transport=transport,
         missing=missing,
+        assumed_zero=['교통비'] if transport.source == BLANK_TRANSPORT else [],
     )
 
 
@@ -464,14 +485,14 @@ def monthly_remaining(row: ComparisonRow, profile: UserProfile | None) -> Postin
             profile.current_housing if profile else None,
             '지금 집 월 주거비 없음' if profile else no_profile,
         ),
-        _from_cost('교통비 (통근)', costs.commute_transport, '지금 집에서 회사까지 교통비 없음'),
+        _transport('교통비 (통근)', costs.commute_transport),
         costs.commute_possible,
     )
     move = _scenario(
         'move',
         base,
         _move_housing(row, costs.move_housing),
-        _from_cost('교통비 (이사)', costs.move_transport, '이사한 뒤 교통비 없음'),
+        _transport('교통비 (이사)', costs.move_transport),
         costs.move_possible,
     )
     # 주거지원비 안내는 이사 주거비에서 실제로 뺐을 때만 단다 (이사할 집 주거비가 없거나

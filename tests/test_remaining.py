@@ -183,16 +183,44 @@ def test_no_profile_keeps_net_income_but_no_remaining():
     assert r.net_income.value is not None
     commute = by_case(r)['commute']
     assert commute.monthly_remaining is None
-    assert set(commute.missing) == {'고정비', '주거비 (지금 집)', '교통비 (통근)'}
+    assert set(commute.missing) == {'고정비', '주거비 (지금 집)'}
 
 
 def test_missing_values_are_never_filled_with_zero():
-    """주거비만 있고 교통비가 없으면 0원으로 치지 않고 null."""
-    profile = UserProfile.model_validate({'current_housing': {'value': 500_000}})
+    """주거비·고정비가 없으면 0원으로 치지 않고 null."""
+    profile = UserProfile()
     commute = by_case(monthly_remaining(row_of('near_pangyo'), profile))['commute']
     assert commute.monthly_remaining is None
-    assert commute.missing == ['고정비', '교통비 (통근)']
+    assert commute.missing == ['고정비', '주거비 (지금 집)']
     assert commute.status == 'missing'
+
+
+def test_blank_transport_is_zero_and_estimated():
+    """교통비만 비어 있으면 0원으로 놓고 계산한다. 추정으로 표시하고 더 들 수 있다고 알린다."""
+    profile = UserProfile.model_validate(
+        {'current_housing': {'value': 500_000}, 'fixed_expenses': []}
+    )
+    r = monthly_remaining(row_of('near_pangyo'), profile)
+    commute = by_case(r)['commute']
+    assert commute.missing == []
+    assert commute.monthly_remaining == r.net_income.value - 500_000
+    assert commute.transport.value == 0
+    assert commute.status == 'estimated'
+    assert commute.assumed_zero == ['교통비']
+    assert '더 들 수 있어요' in commute.transport.source
+
+
+def test_entered_transport_is_not_assumed():
+    profile = UserProfile.model_validate(
+        {
+            'current_housing': {'value': 500_000},
+            'fixed_expenses': [],
+            'default_costs': {'commute_transport': {'value': 0}},
+        }
+    )
+    commute = by_case(monthly_remaining(row_of('near_pangyo'), profile))['commute']
+    assert commute.assumed_zero == []
+    assert commute.transport.source != '비어 있어 0원으로 계산했어요. 교통비가 더 들 수 있어요'
 
 
 def test_empty_fixed_expenses_list_means_zero():
