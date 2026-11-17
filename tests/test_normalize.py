@@ -27,6 +27,7 @@ from backend.normalize import (
     checks,
 )
 from backend.normalize.rows import REGION_QUESTION, build_rows, make_questions
+from backend.privacy import mask_text
 
 # expected.json은 '언급 없음'도 false로 적은 곳이 있다. 우리 스키마는 '언급 없음'을
 # 지어내지 않고 missing(공고에 없음)으로 둔다. 그 차이를 여기에 이유와 함께 적어 둔다.
@@ -286,7 +287,8 @@ def test_claude_extractor_request_and_result():
     assert kw['model'] == MODEL == 'claude-sonnet-5-5'
     assert kw['fallbacks'] == 'default'
     assert 'output_format' not in kw  # 형식 강제(구조화 출력)는 쓰지 않는다 — 문법이 너무 커서 400
-    assert kw['messages'] == [{'role': 'user', 'content': text}]
+    # 보내기 직전에 개인정보를 가린다 (이 공고의 '채용 담당자 jobs@example.com' → [이메일])
+    assert kw['messages'] == [{'role': 'user', 'content': mask_text(text)}]
     system = kw['system'][0]['text']
     assert '"postings"' in system and 'JSON 객체 하나만' in system  # 형식은 프롬프트에
 

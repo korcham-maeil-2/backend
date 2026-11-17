@@ -26,6 +26,7 @@ from langgraph.types import interrupt
 from backend.calc.summary import calculate_all
 from backend.graph.state import GraphState
 from backend.normalize import Extractor, build_rows
+from backend.privacy import mask_text
 from backend.public_data.rent import RentEstimator
 from backend.report import ReportAgent, ReportCheck
 from backend.report import skipped as report_skipped
@@ -62,9 +63,12 @@ def make_normalize(extract: Extractor) -> Callable[[GraphState], dict[str, Any]]
         1) LLM이 칸마다 값과 원문 인용을 뽑는다 (extract)
         2) 코드가 인용·숫자를 원문과 대조해 확인/추정/공고에 없음을 정한다 (build_rows)
         """
-        messages = state.get('messages', [])
+        # 개인정보(이메일·전화번호·담당자 이름·상세 주소 등)를 먼저 가린다 (이슈 #20).
+        # LLM에 보내는 글과 인용을 대조하는 '원문'이 같아야 인용 확인이 맞으므로 여기서 가린다.
+        # (create_message도 보내기 직전에 한 번 더 가린다 — 다른 경로로 새는 것을 막는 안전망)
+        messages = [mask_text(m) for m in state.get('messages', [])]
         text = '\n'.join(messages)
-        image_texts = set(state.get('image_texts', []))
+        image_texts = {mask_text(t) for t in state.get('image_texts', [])}
         # 이미지에서 옮겨 적은 글을 뺀 나머지. 인용이 여기에 없으면 '이미지에서 읽음' 표시.
         plain = '\n'.join(m for m in messages if m not in image_texts) if image_texts else None
         rows = build_rows(extract(text), text, plain)

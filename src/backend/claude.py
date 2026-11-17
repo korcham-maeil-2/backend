@@ -19,6 +19,8 @@ from typing import Any
 
 import anthropic
 
+from backend.privacy import mask_messages
+
 logger = logging.getLogger(__name__)
 
 MODEL = 'claude-sonnet-5-5'
@@ -74,7 +76,10 @@ def create_message(
     스트리밍은 지원하지 않는다.
     error·failure: 실패하면 올릴 예외(NormalizeError·ReadError 등, API가 502로 바꿈)와 그 문구.
     로그에는 상태 코드·예외 이름만 남긴다 (키 값이나 공고 내용은 남기지 않는다).
+    messages의 글은 보내기 직전에 개인정보를 가린다 (privacy.mask_messages, 이슈 #20).
     """
+    if 'messages' in request:
+        request['messages'] = mask_messages(request['messages'])
     try:
         response = get_client().beta.messages.create(
             model=model,
