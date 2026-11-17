@@ -60,6 +60,7 @@ from backend.inputs.transcribe import (
 )
 from backend.main import create_app
 from backend.normalize import FixtureExtractor, build_rows, checks
+from backend.privacy import mask_text
 
 # ── 준비물 ───────────────────────────────────────────────────────
 
@@ -169,6 +170,9 @@ FIXTURE_EXTRACTOR = FixtureExtractor()
 def _rows_for(names: tuple[str, ...], message: str):
     results = FIXTURE_READER.read([demo(n) for n in names], message)
     messages, image_parts = graph_messages(message, results)
+    # normalize 노드와 같이: 개인정보를 가린 글로 정리하고 대조한다
+    messages = [mask_text(m) for m in messages]
+    image_parts = {mask_text(m) for m in image_parts}
     text = '\n'.join(messages)
     plain = '\n'.join(m for m in messages if m not in image_parts)
     return build_rows(FIXTURE_EXTRACTOR(text), text, plain), results
