@@ -27,6 +27,7 @@ from backend.inputs.read import FileReader, daily_budget_from_env
 from backend.inputs.transcribe import ClaudeTranscriber, FixtureTranscriber, Transcriber
 from backend.normalize import Extractor, make_extractor, parse_mode
 from backend.public_data.rent import HttpRentFetcher, RentCache, RentEstimator, RentFetcher
+from backend.report import ClaudeReviewer, ClaudeWriter, ReportAgent
 from backend.support import PolicySource, is_relevant, source_from_env
 from backend.support.youthcenter import API_KEY_ENV as YOUTHCENTER_KEY_ENV
 
@@ -53,6 +54,7 @@ def create_app(
     transcriber: Transcriber | None = None,
     rent_fetcher: RentFetcher | None = None,
     support_source: PolicySource | None = None,
+    report_agent: ReportAgent | None = None,
 ) -> FastAPI:
     """FastAPI 앱을 만들어 돌려준다.
 
@@ -69,6 +71,8 @@ def create_app(
       키도 없으면 월세를 조회하지 않는다.
     support_source: 온통청년 청년정책 조회. 안 주면 환경 변수 YOUTHCENTER_API_KEY가 있을 때만
       실제 API를 부른다 (무료, 결과는 같은 SQLite 파일에 하루 캐시). 키도 없으면 조회하지 않는다.
+    report_agent: 리포트 쓰기·검증 (report/agent.py). 안 주면 공고 정리가 실제 Claude 모드이고
+      키가 있을 때만 실제 Claude로 쓴다 (시연 모드·테스트는 리포트를 쓰지 않는다: 비용 0원).
     """
     db_path = db_path or os.getenv('CHECKPOINT_DB_PATH', DEFAULT_DB_PATH)
     # 공고 정리 방법: 'claude'(실제) / 'fixture'(미리 써 둔 응답) / 'custom'(테스트가 직접 넣음).
@@ -85,6 +89,8 @@ def create_app(
             )
     else:
         normalize_mode = 'custom'
+    if report_agent is None and normalize_mode == 'claude' and _has_api_key_env():
+        report_agent = ReportAgent(ClaudeWriter(), ClaudeReviewer())
     if transcriber is not None:
         file_reader = FileReader(transcriber)
     elif normalize_mode == 'claude':
@@ -116,7 +122,8 @@ def create_app(
             if source is None:
                 logger.info('YOUTHCENTER_API_KEY가 없어 청년 지원 정책을 조회하지 않습니다.')
             app.state.support_source = source
-            app.state.graph = build_graph(saver, extractor, rent_estimator, source)
+            app.state.report_agent = report_agent
+            app.state.graph = build_graph(saver, extractor, rent_estimator, source, report_agent)
             app.state.file_reader = file_reader
             yield
 

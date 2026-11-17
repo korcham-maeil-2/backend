@@ -59,6 +59,8 @@ from backend.inputs.read import (
     safe_name,
 )
 from backend.normalize import NormalizeError
+from backend.report import ReportAgent, ReportCheck
+from backend.report import skipped as report_skipped
 from backend.support import LocalSupport, find_local_support
 
 # APIRouter: 관련된 주소들을 묶는 단위. prefix='/sessions'라서 아래 '/{session_id}'는
@@ -139,6 +141,7 @@ async def _snapshot(graph: CompiledStateGraph, session_id: str) -> SessionRespon
         result=_result(values.get('result')),
         local_support=_local_support(values.get('local_support')),
         report=values.get('report'),
+        report_check=_report_check(values.get('report_check')),
     )
 
 
@@ -149,6 +152,15 @@ def _profile(raw: dict | None) -> UserProfile | None:
         return UserProfile.model_validate(raw)
     except ValidationError:
         logger.warning('저장된 사용자 정보가 지금 모양과 맞지 않아 응답에서 뺐습니다')
+        return None
+
+
+def _report_check(raw: dict | None) -> ReportCheck | None:
+    if raw is None:
+        return None
+    try:
+        return ReportCheck.model_validate(raw)
+    except ValidationError:
         return None
 
 
@@ -336,9 +348,9 @@ async def recalculate(
                 '계산이 끝난 세션이 아닙니다. 비교표 확인 때 사용자 정보를 함께 보내 주세요.',
             )
         # 새 결과를 먼저 다 계산한 뒤, 한 번에 저장한다 (중간에 실패하면 아무것도 바뀌지 않는다).
-        # as_node='write_report': "마지막 노드가 돌려준 것처럼" 저장 → 세션은 계속 completed.
+        # as_node='verify_report': "마지막 노드가 돌려준 것처럼" 저장 → 세션은 계속 completed.
         # (그래프를 calculate부터 다시 돌리면, 중간에 실패했을 때 세션이 '실행 중'에 멈춘다)
-        # TODO(#19): write_report가 LLM을 부르게 되면, 숫자를 바꿀 때마다 리포트를 다시 쓸지 정한다.
+        # 숫자가 바뀌면 예전 리포트는 틀린 말이 되므로 리포트도 다시 쓰고 검증한다 (Claude 호출).
         values = (await graph.aget_state(config)).values
         data = body.model_dump(mode='json')  # 체크포인터(SQLite)에 저장되는 평범한 값으로
         profile = data['profile']
@@ -353,8 +365,11 @@ async def recalculate(
             # 근무지·나이가 바뀌었을 수 있어 다시 고른다 (같은 지역은 캐시라 바로 끝난다)
             'local_support': await _local_support_for(request, table, profile),
         }
-        report = nodes.write_report({**values, **update})
-        await graph.aupdate_state(config, {**update, **report}, as_node='write_report')
+        # 넘길 사실이 그대로면(아무것도 안 고침) 예전 리포트를 그대로 쓴다 (Claude 호출 없음)
+        report = ReportAgent.reusable(values, {**values, **update}) or await _report_for(
+            request, {**values, **update}
+        )
+        await graph.aupdate_state(config, {**update, **report}, as_node='verify_report')
         return await _snapshot(graph, session_id)
 
 
@@ -373,6 +388,18 @@ async def _rents_for(request: Request, table: list[dict], saved: dict[str, dict]
         found = await estimator.estimate_many(new_codes)
         rents |= {c: e.model_dump(mode='json') for c, e in found.items()}
     return rents
+
+
+async def _report_for(request: Request, values: dict) -> dict:
+    """리포트 쓰기 → 검증 → 다시 쓰기를 끝까지 (Claude 호출이라 스레드에서). 꺼져 있으면 skipped."""
+    agent = getattr(request.app.state, 'report_agent', None)
+    if agent is None:
+        return report_skipped()
+    try:
+        return await asyncio.to_thread(agent.run, values)
+    except Exception:
+        logger.exception('리포트를 쓰지 못했습니다')
+        return nodes.report_failed()
 
 
 async def _local_support_for(

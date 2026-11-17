@@ -1,7 +1,7 @@
 """Claude 호출 공통 부분 — 모델·fallback 설정, 실패를 사용자 문구로 바꾸기.
 
 공고 정리(normalize/llm.py)와 이미지 읽기(inputs/transcribe.py)가 함께 쓴다.
-리포트(#19)처럼 Claude를 새로 부르는 곳도 create_message를 쓰면
+리포트(report/)처럼 Claude를 새로 부르는 곳도 create_message를 쓰면
 같은 모델·같은 실패 처리(429·연결 실패·키 없음·거절·잘림)를 그대로 얻는다.
 
 [주의] 개발 중에는 실제 호출을 하지 않는다 (API 키 사용 한도 100달러).
@@ -22,6 +22,8 @@ import anthropic
 logger = logging.getLogger(__name__)
 
 MODEL = 'claude-sonnet-5-5'
+# 짧은 검토(리포트 검증 등)에 쓰는 작고 빠른 모델 (CLAUDE.md: Haiku 5.5 분기·검증)
+REVIEW_MODEL = 'claude-haiku-5-5'
 FALLBACK_BETA = 'server-side-fallback-2026-07-01'
 
 # 서버에 API 키(인증 수단)가 하나도 없을 때 SDK가 요청 직전에 내는 TypeError의 문장.
@@ -58,13 +60,16 @@ def create_message(
     error: type[Exception],
     failure: FailureMessages,
     /,
+    *,
+    model: str = MODEL,
     **request: Any,
 ):
     """Claude에 요청 하나를 보내고, 실패하면 error(문구)로 바꿔 올린다.
 
     get_client: 클라이언트를 돌려주는 함수 (예: lambda: self.client). 클라이언트를 처음 만들 때
       나는 오류(인증 설정 파일이 깨짐 등)도 같은 처리를 받도록 try 안에서 부른다.
-    model·betas·fallbacks는 여기서 채우므로 넘기지 않는다 (넘기면 TypeError → 500).
+    model: 기본은 MODEL(Sonnet). 짧은 검토는 REVIEW_MODEL(Haiku)을 넘긴다.
+    betas·fallbacks는 여기서 채우므로 넘기지 않는다 (넘기면 TypeError → 500).
     나머지(max_tokens, system, messages, output_config 등)는 그대로 넘긴다.
     스트리밍은 지원하지 않는다.
     error·failure: 실패하면 올릴 예외(NormalizeError·ReadError 등, API가 502로 바꿈)와 그 문구.
@@ -72,7 +77,7 @@ def create_message(
     """
     try:
         response = get_client().beta.messages.create(
-            model=MODEL,
+            model=model,
             betas=[FALLBACK_BETA],
             fallbacks='default',
             **request,

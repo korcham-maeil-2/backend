@@ -23,6 +23,7 @@ from backend.calc.summary import CalculationResult
 from backend.inputs.limits import MAX_MESSAGE_CHARS
 from backend.inputs.read import InputKind, ReadMethod
 from backend.normalize.schema import ComparisonRow
+from backend.report import ReportCheck
 from backend.support import LocalSupport
 
 # 세션 상태 3가지
@@ -137,4 +138,9 @@ class SessionResponse(BaseModel):
         default=None,
         description='근무지 지역별 청년 지원 (status가 completed일 때, 키가 없으면 null)',
     )
-    report: str | None = None
+    report: str | None = Field(
+        default=None, description='계산 결과를 쉬운 말로 쓴 리포트 (검증을 통과했을 때만)'
+    )
+    report_check: ReportCheck | None = Field(
+        default=None, description='리포트 검증 결과 (통과·다시 써도 실패·쓰지 못함·꺼짐)'
+    )
