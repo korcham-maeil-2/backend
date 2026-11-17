@@ -59,9 +59,11 @@ from backend.inputs.read import (
     safe_name,
 )
 from backend.normalize import NormalizeError
+from backend.plan import SettlePlan, build_plan
 from backend.report import ReportAgent, ReportCheck
 from backend.report import skipped as report_skipped
 from backend.support import LocalSupport, find_local_support
+from backend.support.policies import today_kst
 
 # APIRouter: 관련된 주소들을 묶는 단위. prefix='/sessions'라서 아래 '/{session_id}'는
 # 실제로 '/sessions/{session_id}'가 된다. tags는 /docs 화면에서 묶어 보여 줄 이름.
@@ -142,7 +144,23 @@ async def _snapshot(graph: CompiledStateGraph, session_id: str) -> SessionRespon
         local_support=_local_support(values.get('local_support')),
         report=values.get('report'),
         report_check=_report_check(values.get('report_check')),
+        plan=_plan(values),
     )
+
+
+def _plan(values: dict) -> SettlePlan | None:
+    """1년 정착 플랜 (build_plan). 계산 결과·청년 지원에서 바로 만든다.
+
+    상태에 따로 저장하지 않는다: 다시 계산하거나 지원을 다시 골라도 플랜이 어긋날 일이 없고,
+    플랜이 생기기 전에 끝난 세션도 조회하면 플랜이 나온다. 날짜는 지원을 조회한 날 기준.
+    """
+    try:
+        return build_plan(
+            values.get('result'), values.get('local_support'), values.get('table'), today_kst()
+        )
+    except ValidationError:
+        logger.warning('저장된 결과가 지금 모양과 맞지 않아 정착 플랜을 만들지 않았습니다')
+        return None
 
 
 def _profile(raw: dict | None) -> UserProfile | None:
