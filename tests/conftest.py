@@ -17,7 +17,7 @@ import anthropic
 import pytest
 
 from backend.normalize import ExtractionResult
-from backend.privacy import mask_text
+from backend.privacy import mask_quotes, mask_text
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = Path(__file__).parent / 'fixtures' / 'normalize'
@@ -80,7 +80,12 @@ class FakeExtractor:
     """
 
     def __init__(self) -> None:
-        self.answers = {mask_text(scenario_text(pid)): scenario_llm(pid) for pid in SCENARIOS}
+        self.answers = {
+            mask_text(scenario_text(pid)): ExtractionResult.model_validate(
+                mask_quotes(scenario_llm(pid).model_dump(mode='json'))
+            )
+            for pid in SCENARIOS
+        }
         self.calls: list[str] = []
 
     def __call__(self, text: str) -> ExtractionResult:

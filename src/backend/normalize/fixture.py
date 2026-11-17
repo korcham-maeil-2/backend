@@ -17,6 +17,7 @@
   같은 공고를 글과 파일로 두 번 넣으면 여기서는 한 행이 되지만, 실제 Claude는 두 행을 낼 수도 있다.
 """
 
+import json
 import logging
 from pathlib import Path
 from typing import Literal
@@ -24,6 +25,7 @@ from typing import Literal
 from backend.normalize.checks import squash
 from backend.normalize.llm import ClaudeExtractor, Extractor
 from backend.normalize.schema import ExtractedPosting, ExtractionResult
+from backend.privacy import mask_quotes
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +58,9 @@ class FixtureExtractor:
         files = sorted(fixtures_dir.glob('*.llm.json'), key=lambda f: (f.name.count('.'), f.name))
         for answer in files:
             pid = answer.name.split('.')[0]
-            result = ExtractionResult.model_validate_json(answer.read_text(encoding='utf-8'))
+            # LLM에는 개인정보를 가린 글이 간다 → 써 둔 답의 인용도 같은 규칙으로 가려 맞춘다
+            raw = json.loads(answer.read_text(encoding='utf-8'))
+            result = ExtractionResult.model_validate(mask_quotes(raw))
             for posting in result.postings:
                 quotes = _quotes(posting)
                 company = posting.company.quote
