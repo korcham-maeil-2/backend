@@ -1,11 +1,10 @@
 """그래프 조립 — 노드(함수)들을 화살표(엣지)로 이어 실행 가능한 그래프를 만든다.
 
 완성된 모양:
-    START → route_input → normalize → confirm_table ─┬→ get_rent → calculate ─┬→ write_report
-                                                    └→ get_local_support ───┘       ↓     ↑ 문제
-                                                                               verify_report ─┘ 있음
-                                                                                    ↓ 통과·횟수 끝
-                                                                                   END
+    START → route_input → normalize → confirm_table(멈춤) → check_missing(빈 값이면 멈춤)
+        ─┬→ get_rent → calculate ─┬→ write_report ⇄ verify_report (문제 있으면 다시 쓰기)
+         └→ get_local_support ───┘        ↓ 통과·횟수 끝
+                                         END
     (월세 조회와 청년 지원 조회는 서로 기다릴 필요가 없어 동시에 돈다)
     (START, END는 LangGraph가 정해 둔 '시작점'과 '끝점' 표시)
 """
@@ -50,6 +49,7 @@ def build_graph(
     builder.add_node('route_input', nodes.route_input)
     builder.add_node('normalize', nodes.make_normalize(extractor or ClaudeExtractor()))
     builder.add_node('confirm_table', nodes.confirm_table)
+    builder.add_node('check_missing', nodes.check_missing)
     builder.add_node('get_rent', nodes.make_get_rent(rent_estimator))
     builder.add_node('get_local_support', nodes.make_get_local_support(support_source))
     builder.add_node('calculate', nodes.calculate)
@@ -64,8 +64,10 @@ def build_graph(
     builder.add_edge('route_input', 'normalize')
     builder.add_edge('normalize', 'confirm_table')
     # 한 노드에서 두 갈래로 나가면 둘이 동시에 돈다.
-    builder.add_edge('confirm_table', 'get_rent')
-    builder.add_edge('confirm_table', 'get_local_support')
+    # 확인 뒤 계산을 막는 빈 값이 있으면 되묻고 기다린다 (없으면 바로 지나간다)
+    builder.add_edge('confirm_table', 'check_missing')
+    builder.add_edge('check_missing', 'get_rent')
+    builder.add_edge('check_missing', 'get_local_support')
     builder.add_edge('get_rent', 'calculate')
     # 목록으로 이으면 '둘 다 끝나야' write_report로 간다.
     builder.add_edge(['calculate', 'get_local_support'], 'write_report')

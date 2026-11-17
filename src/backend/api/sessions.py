@@ -48,6 +48,7 @@ from backend.api.schemas import (
 from backend.calc.remaining import UserProfile
 from backend.calc.summary import calculate_all
 from backend.graph import nodes
+from backend.graph.ask import ASK_MISSING, Answers
 from backend.inputs.errors import FileInputError, ReadError
 from backend.inputs.limits import MAX_MESSAGE_CHARS
 from backend.inputs.read import (
@@ -124,7 +125,7 @@ async def _snapshot(graph: CompiledStateGraph, session_id: str) -> SessionRespon
         pending = PendingQuestion(type=value.get('type', 'unknown'), payload=value)
 
     if pending:
-        state = 'awaiting_confirmation'
+        state = 'awaiting_answer' if pending.type == ASK_MISSING else 'awaiting_confirmation'
     elif not snap.next:
         state = 'completed'
     else:
@@ -329,6 +330,20 @@ async def confirm_table(session_id: str, body: ConfirmRequest, request: Request)
     graph = _graph(request)
     async with _locked(session_id):
         current = await _snapshot(graph, session_id)
+        if current.status == 'awaiting_answer':
+            # 되묻기를 기다리는 중에 생활비 화면에서 고쳐 다시 계산을 눌렀다:
+            # 보낸 값으로 '확인을 다시 한 것처럼' 저장하고 check_missing부터 다시 돈다
+            # (고친 값으로 빈 값이 채워졌으면 묻지 않고 계산까지 간다).
+            data = body.model_dump(mode='json')
+            update = {'table_confirmed': body.approved}
+            if body.table is not None:
+                update['table'] = data['table']
+            if body.profile is not None:
+                update['user_profile'] = data['profile']
+            config = _config(session_id)
+            await graph.aupdate_state(config, update, as_node='confirm_table')
+            await graph.ainvoke(None, config)
+            return await _snapshot(graph, session_id)
         if current.status != 'awaiting_confirmation':
             # 409 Conflict: 지금 상태와 맞지 않는 요청 (예: 이미 끝난 세션에 또 확인을 보냄)
             raise AppError(
@@ -341,6 +356,26 @@ async def confirm_table(session_id: str, body: ConfirmRequest, request: Request)
         # body.model_dump(mode='json'): Pydantic 모델 → 평범한 dict
         #   ({'approved': True, 'table': None, 'profile': {...} 또는 None})
         #   mode='json'은 체크포인터(SQLite)에 그대로 저장되는 값(문자열·숫자·리스트)만 남긴다.
+        await graph.ainvoke(Command(resume=body.model_dump(mode='json')), _config(session_id))
+        return await _snapshot(graph, session_id)
+
+
+@router.post('/{session_id}/answers', responses=error_responses(404, 409))
+async def answer_questions(session_id: str, body: Answers, request: Request) -> SessionResponse:
+    """되묻기에 답한다 (이슈 #13) = check_missing에서 멈춘 그래프를 답과 함께 다시 깨운다.
+
+    답한 값은 '사용자 입력'으로 사용자 정보에 들어가고, 계산이 이어진다 (모르면 null).
+    되묻기를 기다리는 세션이 아니면 409.
+    """
+    graph = _graph(request)
+    async with _locked(session_id):
+        current = await _snapshot(graph, session_id)
+        if current.status != 'awaiting_answer':
+            raise AppError(
+                status.HTTP_409_CONFLICT,
+                ErrorCode.SESSION_NOT_AWAITING_ANSWER,
+                '되묻기에 대한 답을 기다리는 세션이 아닙니다.',
+            )
         await graph.ainvoke(Command(resume=body.model_dump(mode='json')), _config(session_id))
         return await _snapshot(graph, session_id)
 

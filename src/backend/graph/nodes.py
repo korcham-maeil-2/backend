@@ -24,6 +24,7 @@ from langgraph.graph import END
 from langgraph.types import interrupt
 
 from backend.calc.summary import calculate_all
+from backend.graph.ask import ASK_MISSING, apply_answers, missing_questions
 from backend.graph.state import GraphState
 from backend.normalize import Extractor, build_rows
 from backend.privacy import mask_text
@@ -112,6 +113,24 @@ def confirm_table(state: GraphState) -> dict[str, Any]:
     if answer.get('profile') is not None:
         update['user_profile'] = answer['profile']
     return update
+
+
+def check_missing(state: GraphState) -> dict[str, Any]:
+    """되묻기 (이슈 #13): 계산을 막는 값이 비어 있으면 사용자에게 묻고 기다린다 (graph/ask.py).
+
+    confirm_table과 같은 방식으로 멈춘다: 처음 실행에서 interrupt()가 질문을 내보내고,
+    POST /sessions/{id}/answers가 Command(resume={'answers': {...}})로 깨우면 이 함수가 처음부터
+    다시 돌며 interrupt()가 그 답을 돌려준다. 질문을 고르는 일은 상태만 보므로 다시 돌아도 같다.
+    빠진 값이 없으면 아무것도 바꾸지 않고 지나간다.
+    """
+    questions = missing_questions(state.get('table'), state.get('user_profile'))
+    if not questions:
+        return {}
+    answer = interrupt(
+        {'type': ASK_MISSING, 'questions': [q.model_dump(mode='json') for q in questions]}
+    )
+    answers = (answer or {}).get('answers') or {}
+    return {'user_profile': apply_answers(state['user_profile'], answers)}
 
 
 def table_lawd_codes(table: list[dict] | None) -> set[str]:
