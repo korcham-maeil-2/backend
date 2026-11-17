@@ -20,13 +20,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from backend.api.errors import register_error_handlers, register_upload_size_limit
+from backend.api.plan_extras import router as plan_router
 from backend.api.rent import router as rent_router
 from backend.api.sessions import router as sessions_router
 from backend.graph import build_graph
 from backend.inputs.read import FileReader, daily_budget_from_env
 from backend.inputs.transcribe import ClaudeTranscriber, FixtureTranscriber, Transcriber
 from backend.normalize import Extractor, make_extractor, parse_mode
+from backend.public_data.finlife import SavingsSource, savings_from_env
 from backend.public_data.rent import HttpRentFetcher, RentCache, RentEstimator, RentFetcher
+from backend.public_data.training import TrainingSource, training_from_env
 from backend.report import ClaudeReviewer, ClaudeWriter, ReportAgent
 from backend.support import PolicySource, is_relevant, source_from_env
 from backend.support.youthcenter import API_KEY_ENV as YOUTHCENTER_KEY_ENV
@@ -55,6 +58,8 @@ def create_app(
     rent_fetcher: RentFetcher | None = None,
     support_source: PolicySource | None = None,
     report_agent: ReportAgent | None = None,
+    savings_source: SavingsSource | None = None,
+    training_source: TrainingSource | None = None,
 ) -> FastAPI:
     """FastAPI 앱을 만들어 돌려준다.
 
@@ -73,6 +78,8 @@ def create_app(
       실제 API를 부른다 (무료, 결과는 같은 SQLite 파일에 하루 캐시). 키도 없으면 조회하지 않는다.
     report_agent: 리포트 쓰기·검증 (report/agent.py). 안 주면 공고 정리가 실제 Claude 모드이고
       키가 있을 때만 실제 Claude로 쓴다 (시연 모드·테스트는 리포트를 쓰지 않는다: 비용 0원).
+    savings_source / training_source: 정착 플랜의 적금(금감원)·재직자 강의(고용24) 조회.
+      안 주면 환경 변수 FINLIFE_API_KEY / WORK24_TRAINING_*_KEY가 있을 때만 실제 API를 부른다.
     """
     db_path = db_path or os.getenv('CHECKPOINT_DB_PATH', DEFAULT_DB_PATH)
     # 공고 정리 방법: 'claude'(실제) / 'fixture'(미리 써 둔 응답) / 'custom'(테스트가 직접 넣음).
@@ -125,6 +132,8 @@ def create_app(
             app.state.report_agent = report_agent
             app.state.graph = build_graph(saver, extractor, rent_estimator, source, report_agent)
             app.state.file_reader = file_reader
+            app.state.savings_source = savings_source or savings_from_env()
+            app.state.training_source = training_source or training_from_env()
             yield
 
     app = FastAPI(title='월급지도 API', version='0.1.0', lifespan=lifespan)
@@ -161,6 +170,7 @@ def create_app(
     # 세션 관련 주소들(/sessions ...)은 api/sessions.py에 모아 두고 여기서 붙인다.
     app.include_router(sessions_router)
     app.include_router(rent_router)
+    app.include_router(plan_router)
     return app
 
 
