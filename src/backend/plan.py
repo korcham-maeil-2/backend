@@ -17,7 +17,7 @@
   - 특정 대상 정책(fit=targeted: 자립준비청년·창업 등)은 플랜에 넣지 않는다 (목록에는 남아 있다).
   - 신청 기간이 있는 정책: 신청 중이면 마감 달, 곧 시작이면 시작 달. 12개월 밖은 넣지 않는다.
   - 상시·기간 모름 정책은 할 일 시점으로 나눈다 (실제 정책은 대부분 상시라 달로는 나뉘지 않는다):
-      보증금·전세 대출(보증금·전세·버팀목·보증부) → '이사 전'
+      보증금·전세 대출(보증금·전세·전월세·버팀목·보증부) → '이사 전'
       월세 지원(월세)                          → '이사한 달'
       그 밖 이사·주거 정책                      → '언제든' (최대 ANYTIME_MAX개)
     일반 정책(fit=general)은 상시면 넣지 않는다 (상담·행사 등이 많다. 지원 목록에는 남아 있다).
@@ -39,7 +39,8 @@ from backend.support.policies import LocalSupport, SupportPolicy
 
 MONTHS = 12
 ANYTIME_MAX = 5
-_DEPOSIT_WORDS = re.compile(r'보증금|전세|버팀목|보증부')
+# '전월세'(예: 청년 전월세 대출보증)는 보증금 대출이라 이사 전 — '월세'보다 먼저 본다
+_DEPOSIT_WORDS = re.compile(r'보증금|전세|전월세|버팀목|보증부')
 _RENT_WORDS = re.compile(r'월세')
 
 ItemKind = Literal['deposit', 'move_in', 'policy']
@@ -118,10 +119,11 @@ def _md(d: date) -> str:
 
 
 def _summary(text: str | None, limit: int = 80) -> str | None:
-    """지원 내용 원문을 한 줄로: 줄바꿈·글머리 기호(□○▪※-)를 빼고 limit자에서 줄인다."""
+    """지원 내용 원문을 한 줄로: 줄바꿈·글머리 기호(□○▪※-, 자음 ㅁ·ㅇ)를 빼고 limit자에서 줄인다."""
     if not text:
         return None
-    line = re.sub(r'(?m)[□■○●▪◦※•\ufe0f]|^\s*-\s*', ' ', text)
+    # 자음 낱자 ㅁ·ㅇ은 온통청년 원문에서 글머리로만 쓰인다 ('ㅁ대상:', 'ㅇ (전세)')
+    line = re.sub(r'(?m)[□■○●▪◦※•ㅁㅇ\ufe0f]|^\s*-\s*', ' ', text)
     line = re.sub(r'\s+', ' ', line).strip()
     if not line:
         return None

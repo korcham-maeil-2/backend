@@ -176,6 +176,25 @@ def test_no_result_no_plan():
     assert build_plan(None, None, [], TODAY) is None
 
 
+def test_jeonwolse_guarantee_goes_before_moving():
+    """'청년 전월세 대출보증'은 보증금 대출 보증이라 '이사 전'.
+    '월세'로 잡혀 이사한 달에 가면 안 된다 (실제 온통청년 데이터로 확인하다 찾은 경우)."""
+    table, result = naju()
+    local = [policy('J', '청년 전월세 대출보증', apply_status='always', apply_period='상시')]
+    assert slots_of(build_plan(result, support(local), table, TODAY))['이사 전'] == [
+        '보증금 마련',
+        '청년 전월세 대출보증',
+    ]
+
+
+def test_jamo_bullets_are_removed():
+    table, result = naju()
+    raw = 'ㅁ대상: 만 19~34세 무주택 청년\nㅇ (전세) 보증금 5억원 이하'
+    local = [policy('S', '청년 월세 대출', support=raw)]
+    item = build_plan(result, support(local), table, TODAY).postings[0].slots[2].items[0]
+    assert item.detail == '대상: 만 19~34세 무주택 청년 (전세) 보증금 5억원 이하'
+
+
 def test_policy_summary_is_one_clean_line():
     table, result = naju()
     raw = '□ 대출금리\n(우대형) 연 1.3%\n※ 지방은 0.2%p 인하\n - 한도 1억원'
