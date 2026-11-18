@@ -204,3 +204,103 @@ def test_api_routes(tmp_path):
         training = c.get(f'/plan/training/{PANGYO}').json()
         assert training['status'] == 'ok' and training['courses'][0]['title'] == '과정'
         assert c.get('/plan/training/99999').status_code == 404
+
+
+# ── 리뷰 반영 (backend#49 리뷰) ──
+
+
+class PartlyBroken(FakeWork24):
+    """컨소시엄만 실패 (키 오류 등)."""
+
+    def __call__(self, kind, sido, sigungu, today, weekend):
+        if kind == 'consortium':
+            self.calls.append((kind, sido, sigungu, weekend))
+            raise TrainingError('신청하신 OpenApi 서비스가 존재하지 않습니다')
+        return super().__call__(kind, sido, sigungu, today, weekend)
+
+
+def test_one_kind_failing_keeps_the_other():
+    """컨소시엄 키 하나만 틀려도 내일배움카드 과정은 보인다. 둘 다 실패할 때만 unavailable."""
+    fake = PartlyBroken({('card', PANGYO): [raw_course('카드 과정', '2026-12-01')]})
+    found = TrainingSource(fake).get(PANGYO, TODAY)
+    assert found.status == 'ok' and [c.title for c in found.courses] == ['카드 과정']
+    both = TrainingSource(FakeWork24({}, fail=True)).get(PANGYO, TODAY)
+    assert both.status == 'unavailable'
+
+
+def test_widens_when_sigungu_has_only_courses_starting_today():
+    """시군구에 '오늘 시작' 과정만 있으면 날짜로 거른 뒤 비었으니 시도로 넓힌다."""
+    fake = FakeWork24(
+        {
+            ('card', PANGYO): [raw_course('오늘 시작', TODAY.isoformat())],
+            ('card', '41'): [raw_course('경기 과정', '2026-12-01', area='41131')],
+        }
+    )
+    found = TrainingSource(fake, kinds=('card',)).get(PANGYO, TODAY)
+    assert found.scope == 'sido' and [c.title for c in found.courses] == ['경기 과정']
+
+
+def test_failure_is_remembered_for_a_while():
+    """실패한 지역은 잠깐(쿨다운) 다시 묻지 않는다 (열 때마다 느린 조회를 되풀이하지 않게)."""
+    from backend.public_data.training import FAILURE_COOLDOWN_SECONDS
+
+    now = [0.0]
+    fake = FakeWork24({}, fail=True)
+    source = TrainingSource(fake, kinds=('card',), clock=lambda: now[0])
+    source.get(PANGYO, TODAY)
+    calls = len(fake.calls)
+    assert source.get(PANGYO, TODAY).status == 'unavailable'
+    assert len(fake.calls) == calls
+    now[0] = FAILURE_COOLDOWN_SECONDS + 1
+    source.get(PANGYO, TODAY)
+    assert len(fake.calls) > calls
+
+
+def test_cache_is_per_day():
+    """같은 날에는 캐시, 날짜가 바뀌면 다시 묻는다 (전날 목록이 남지 않게)."""
+    fake = FakeWork24({('card', PANGYO): [raw_course('과정', '2026-12-01')]})
+    source = TrainingSource(fake, kinds=('card',))
+    source.get(PANGYO, TODAY)
+    calls = len(fake.calls)
+    source.get(PANGYO, TODAY)
+    assert len(fake.calls) == calls
+    source.get(PANGYO, date(2026, 11, 18))
+    assert len(fake.calls) > calls
+
+
+def test_courses_without_institute_are_not_grouped():
+    from backend.public_data.training import PER_INSTITUTE, _course
+
+    many = [_course(raw_course(f'과정 {i}', '2026-12-01', subTitle=''), 'card') for i in range(5)]
+    assert len(pick_courses(many, TODAY)) == 5 > PER_INSTITUTE
+
+
+def test_odd_training_rows_are_skipped():
+    """응답 행 모양이 이상하면(제목이 숫자 등) 그 행만 건너뛴다 (500이 나지 않게)."""
+    fake = FakeWork24(
+        {
+            ('card', PANGYO): [
+                raw_course('정상 과정', '2026-12-01'),
+                {**raw_course('x', '2026-12-01'), 'title': 3},
+            ]
+        }
+    )
+    found = TrainingSource(fake, kinds=('card',)).get(PANGYO, TODAY)
+    assert [c.title for c in found.courses] == ['정상 과정']
+
+
+def test_odd_savings_answer_is_unavailable_not_500():
+    """금감원 응답 모양이 예상과 다르면 500 대신 '불러오지 못함'. 실패도 잠깐 기억한다."""
+    calls = []
+
+    def odd():
+        calls.append(1)
+        return {
+            'base': [{'fin_prdt_nm': 3, 'join_deny': '1', 'fin_co_no': 'B', 'fin_prdt_cd': 'A'}],
+            'options': [{'fin_co_no': 'B', 'fin_prdt_cd': 'A', 'save_trm': '12', 'intr_rate': 3}],
+        }
+
+    source = SavingsSource(odd)
+    assert source.get().status == 'unavailable'
+    source.get()
+    assert len(calls) == 1  # 쿨다운 동안 다시 묻지 않는다

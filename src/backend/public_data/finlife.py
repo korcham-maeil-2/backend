@@ -36,6 +36,11 @@ BANKS = '020000'
 TERM = '12'
 SAVINGS_MAX = 3
 CACHE_SECONDS = 60 * 60  # 공시는 달마다 바뀐다. 약관상 오래 두지 않는다
+# 금감원이 느려도 화면이 오래 기다리지 않게 짧게. 실패하면 이 동안 다시 묻지 않는다
+# (youthcenter.py와 같은 방식)
+TIMEOUT = httpx.Timeout(8.0, connect=3.0)
+FAILURE_COOLDOWN_SECONDS = 120
+MAX_PAGES = 5  # 은행 적금은 1쪽(60개). 응답이 이상해도 끝없이 돌지 않게
 SOURCE = '금융상품통합비교공시시스템(금융감독원) 금융회사 상품정보'
 SOURCE_URL = 'https://finlife.fss.or.kr'
 
@@ -74,22 +79,30 @@ def http_fetcher(api_key: str) -> Fetcher:
 
     def fetch() -> dict[str, Any]:
         base, options, month, page = [], [], None, 1
-        with httpx.Client(timeout=httpx.Timeout(15, connect=10)) as client:
+        with httpx.Client(timeout=TIMEOUT) as client:
             while True:
                 params = {'auth': api_key, 'topFinGrpNo': BANKS, 'pageNo': page}
                 try:
                     result = client.get(URL, params=params).json()['result']
-                except (httpx.HTTPError, ValueError, KeyError) as e:
+                    if not isinstance(result, dict):
+                        raise TypeError('result가 객체가 아님')
+                    if result.get('err_cd') != '000':
+                        raise FinlifeError(f'err_cd {result.get("err_cd")}')
+                    pages = int(result.get('max_page_no') or 1)
+                except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
                     raise FinlifeError(type(e).__name__) from e
-                if result.get('err_cd') != '000':
-                    raise FinlifeError(f'err_cd {result.get("err_cd")}')
-                base += result.get('baseList') or []
-                options += result.get('optionList') or []
-                if page >= int(result.get('max_page_no') or 1):
+                # 응답 모양이 다르면 그 부분만 버린다 (500 대신)
+                for key, into in (('baseList', base), ('optionList', options)):
+                    items = result.get(key)
+                    if isinstance(items, list):
+                        into += [x for x in items if isinstance(x, dict)]
+                if page >= min(pages, MAX_PAGES):
                     break
                 page += 1
         if base:
-            month = base[0].get('dcls_month')
+            month = (
+                base[0].get('dcls_month') if isinstance(base[0].get('dcls_month'), str) else None
+            )
         return {'base': base, 'options': options, 'month': month}
 
     return fetch
@@ -137,6 +150,7 @@ class SavingsSource:
     def __init__(self, fetch: Fetcher | None, clock: Callable[[], float] = time.monotonic) -> None:
         self._fetch, self._clock = fetch, clock
         self._cached: tuple[float, SavingsList] | None = None
+        self._failed: tuple[float, SavingsList] | None = None
 
     def get(self) -> SavingsList:
         if self._fetch is None:
@@ -149,19 +163,22 @@ class SavingsSource:
         now = self._clock()
         if self._cached and now - self._cached[0] < CACHE_SECONDS:
             return self._cached[1]
+        if self._failed and now - self._failed[0] < FAILURE_COOLDOWN_SECONDS:
+            return self._failed[1]
         try:
             data = self._fetch()
-        except FinlifeError as e:
+            products = pick_savings(data)
+        except (FinlifeError, TypeError, AttributeError, KeyError, ValueError) as e:
             logger.warning('금감원 적금 조회 실패: %s', e)
-            return SavingsList(
+            failed = SavingsList(
                 products=[],
                 disclosed_month=None,
                 status='unavailable',
                 reason='적금 정보를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.',
             )
-        found = SavingsList(
-            products=pick_savings(data), disclosed_month=data.get('month'), status='ok'
-        )
+            self._failed = (now, failed)
+            return failed
+        found = SavingsList(products=products, disclosed_month=data.get('month'), status='ok')
         self._cached = (now, found)
         return found
 

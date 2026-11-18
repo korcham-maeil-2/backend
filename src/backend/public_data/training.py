@@ -47,11 +47,15 @@ KINDS: dict[str, tuple[str, str, str]] = {
         'WORK24_TRAINING_CONSORTIUM_KEY',
     ),
 }
-KIND_LABEL = {'card': '국민내일배움카드', 'consortium': '중소기업 재직자 무료(컨소시엄)'}
+KIND_LABEL = {'card': '국민내일배움카드', 'consortium': '중소기업 재직자 대상(컨소시엄)'}
 SEARCH_DAYS = 92  # 시작일 범위: 오늘~3개월
 TRAINING_MAX = 5
 PER_INSTITUTE = 2
-CACHE_SECONDS = 24 * 60 * 60
+CACHE_SECONDS = 24 * 60 * 60  # 같은 날 안에서만 쓴다 (캐시 키에 날짜가 들어 있다)
+# 고용24가 느려도 화면이 오래 기다리지 않게 짧게. 실패한 지역은 이 동안 다시 묻지 않는다
+# (youthcenter.py와 같은 방식: 페이지를 열 때마다 느린 조회를 되풀이하지 않게)
+TIMEOUT = httpx.Timeout(8.0, connect=3.0)
+FAILURE_COOLDOWN_SECONDS = 120
 SOURCE = '고용24 훈련과정 (work24.go.kr)'
 WEEKEND = '1'
 
@@ -103,7 +107,8 @@ def http_fetcher(keys: dict[Kind, str]) -> Fetcher:
             'outType': '1',
             'pageNum': '1',
             'pageSize': '100',
-            'srchTraStDt': f'{today:%Y%m%d}',
+            # 내일부터 시작하는 과정만 (오늘 시작은 이미 신청하기 어렵다)
+            'srchTraStDt': f'{today + timedelta(days=1):%Y%m%d}',
             'srchTraEndDt': f'{today + timedelta(days=SEARCH_DAYS):%Y%m%d}',
             'sort': 'ASC',
             'sortCol': '2',
@@ -116,12 +121,18 @@ def http_fetcher(keys: dict[Kind, str]) -> Fetcher:
         if weekend:
             params['wkendSe'] = WEEKEND
         try:
-            body = httpx.get(url, params=params, timeout=httpx.Timeout(15, connect=10)).json()
+            body = httpx.get(url, params=params, timeout=TIMEOUT).json()
         except (httpx.HTTPError, ValueError) as e:
             raise TrainingError(type(e).__name__) from e
+        # 응답 모양이 다르면(목록이 아님 등) 500 대신 '불러오지 못함'으로
+        if not isinstance(body, dict):
+            raise TrainingError('응답이 객체가 아님')
         if 'error' in body:
             raise TrainingError(str(body['error'])[:80])
-        return body.get('srchList') or []
+        found = body.get('srchList') or []
+        if not isinstance(found, list):
+            raise TrainingError('srchList가 목록이 아님')
+        return [raw for raw in found if isinstance(raw, dict)]
 
     return fetch
 
@@ -133,36 +144,43 @@ def _int(value: Any) -> int | None:
         return None
 
 
+def _str(value: Any) -> str:
+    return value.strip() if isinstance(value, str) else ''
+
+
 def _course(raw: dict[str, Any], kind: Kind) -> Course | None:
-    start = (raw.get('traStartDate') or '').strip()
-    if not raw.get('title') or len(start) != 10:
+    start = _str(raw.get('traStartDate'))
+    if not _str(raw.get('title')) or len(start) != 10:
         return None
     fee = _int(raw.get('courseMan'))
     return Course(
         title=' '.join(str(raw['title']).split()),
-        institute=(raw.get('subTitle') or '').strip() or None,
+        institute=_str(raw.get('subTitle')) or None,
         kind=kind,
         kind_label=KIND_LABEL[kind],
         start=start,
-        end=(raw.get('traEndDate') or '').strip() or None,
+        end=_str(raw.get('traEndDate')) or None,
         weekend=str(raw.get('wkendSe')) == WEEKEND,
         fee_krw=0 if kind == 'consortium' else fee,
-        url=(raw.get('titleLink') or '').strip() or None,
+        url=_str(raw.get('titleLink')) or None,
     )
 
 
 def pick_courses(found: list[Course], today: date, n: int = TRAINING_MAX) -> list[Course]:
     """내일부터 시작하는 과정만 (오늘 시작은 이미 신청하기 어렵다), 주말반 먼저, 시작일 빠른 순.
-    같은 과정(이름·기관·시작일)은 한 번, 한 기관은 PER_INSTITUTE개까지."""
+    같은 과정(이름·기관·시작일)은 한 번, 한 기관은 PER_INSTITUTE개까지 (기관 이름이 없는 과정은
+    서로 다른 기관일 수 있어 묶지 않는다)."""
     seen: set = set()
     per: Counter = Counter()
     out: list[Course] = []
     for c in sorted(found, key=lambda c: (not c.weekend, c.start, c.title)):
         key = (c.title, c.institute, c.start)
-        if c.start <= today.isoformat() or key in seen or per[c.institute] >= PER_INSTITUTE:
+        crowded = c.institute is not None and per[c.institute] >= PER_INSTITUTE
+        if c.start <= today.isoformat() or key in seen or crowded:
             continue
         seen.add(key)
-        per[c.institute] += 1
+        if c.institute is not None:
+            per[c.institute] += 1
         out.append(c)
     return out[:n]
 
@@ -175,20 +193,42 @@ class TrainingSource:
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._fetch, self._kinds, self._clock = fetch, kinds, clock
-        self._cache: dict[str, tuple[float, TrainingList]] = {}
+        # (시군구, 날짜) → (저장 시각, 결과). 날짜가 바뀌면 새로 묻는다
+        self._cache: dict[tuple[str, date], tuple[float, TrainingList]] = {}
+        self._failed: dict[str, tuple[float, TrainingList]] = {}  # 실패한 지역 (잠깐 기억)
 
-    def _collect(self, sido: str, sigungu: str | None, today: date) -> list[Course]:
+    def _kind(self, kind: Kind, sido: str, sigungu: str | None, today: date) -> list[Course]:
+        """한 종류(내일배움카드·컨소시엄)의 과정. 주말반은 따로 한 번 더 묻는다 (모듈 설명)."""
+        raws = self._fetch(kind, sido, sigungu, today, True)  # 주말반
+        raws += self._fetch(kind, sido, sigungu, today, False)
         courses = []
-        for kind in self._kinds:
-            raws = self._fetch(kind, sido, sigungu, today, True)  # 주말반
-            raws += self._fetch(kind, sido, sigungu, today, False)
-            for raw in raws:
-                # 지역은 trngAreaCd로 판단 (시군구로 찾을 때만 걸러낸다)
-                if sigungu and str(raw.get('trngAreaCd') or '') not in ('', sigungu):
-                    continue
-                if (c := _course(raw, kind)) is not None:
-                    courses.append(c)
+        for raw in raws:
+            # 지역은 trngAreaCd로 판단 (시군구로 찾을 때만 걸러낸다)
+            if sigungu and str(raw.get('trngAreaCd') or '') not in ('', sigungu):
+                continue
+            if (c := _course(raw, kind)) is not None:
+                courses.append(c)
         return courses
+
+    def _collect(self, lawd_cd: str, today: date) -> tuple[list[Course], str, list[str]]:
+        """종류마다 따로 조회한다: 한 종류가 실패해도(키 오류 등) 다른 종류는 보여 준다.
+        시군구에 '내일부터 시작하는' 과정이 없으면 그 종류는 시도로 넓힌다.
+        돌려주는 값: (과정, 범위, 실패한 종류)"""
+        courses: list[Course] = []
+        scope = 'sigungu'
+        failed: list[str] = []
+        for kind in self._kinds:
+            try:
+                found = pick_courses(self._kind(kind, lawd_cd[:2], lawd_cd, today), today)
+                if not found:  # 날짜로 거른 뒤에도 없으면 시도로 (명세 8절)
+                    found = pick_courses(self._kind(kind, lawd_cd[:2], None, today), today)
+                    scope = 'sido' if found else scope
+            except (TrainingError, TypeError, AttributeError, KeyError, ValueError) as e:
+                logger.warning('고용24 %s 조회 실패 (%s): %s', kind, lawd_cd, e)
+                failed.append(kind)
+                continue
+            courses += found
+        return courses, scope, failed
 
     def get(self, lawd_cd: str, today: date) -> TrainingList:
         region = region_by_code(lawd_cd)
@@ -202,17 +242,16 @@ class TrainingSource:
                 status='off',
                 reason='재직자 강의를 불러오지 않아요 (서버에 고용24 인증키 없음)',
             )
-        cached = self._cache.get(lawd_cd)
-        if cached and self._clock() - cached[0] < CACHE_SECONDS:
+        now = self._clock()
+        cached = self._cache.get((lawd_cd, today))
+        if cached and now - cached[0] < CACHE_SECONDS:
             return cached[1]
-        try:
-            courses = self._collect(lawd_cd[:2], lawd_cd, today)
-            scope: Literal['sigungu', 'sido'] = 'sigungu'
-            if not courses:  # 시군구에 과정이 없으면 시도로 넓힌다 (명세 8절)
-                courses, scope = self._collect(lawd_cd[:2], None, today), 'sido'
-        except TrainingError as e:
-            logger.warning('고용24 훈련과정 조회 실패 (%s): %s', lawd_cd, e)
-            return TrainingList(
+        failed_before = self._failed.get(lawd_cd)
+        if failed_before and now - failed_before[0] < FAILURE_COOLDOWN_SECONDS:
+            return failed_before[1]
+        courses, scope, failed = self._collect(lawd_cd, today)
+        if failed and len(failed) == len(self._kinds):  # 모든 종류가 실패했을 때만 '불러오지 못함'
+            result = TrainingList(
                 lawd_cd=lawd_cd,
                 region=name,
                 scope='sigungu',
@@ -220,14 +259,17 @@ class TrainingSource:
                 status='unavailable',
                 reason='재직자 강의를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.',
             )
+            self._failed[lawd_cd] = (now, result)
+            return result
         found = TrainingList(
             lawd_cd=lawd_cd,
             region=name,
-            scope=scope,
+            scope=scope,  # type: ignore[arg-type]
             courses=pick_courses(courses, today),
             status='ok',
         )
-        self._cache[lawd_cd] = (self._clock(), found)
+        if not failed:  # 일부만 실패했으면 캐시하지 않는다 (다음에 다시 묻는다)
+            self._cache[(lawd_cd, today)] = (now, found)
         return found
 
 
