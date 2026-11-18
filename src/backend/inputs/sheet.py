@@ -18,9 +18,9 @@ from collections.abc import Iterable
 
 from backend.inputs.errors import FileInputError, InputErrorCode
 from backend.inputs.limits import (
+    MAX_POSTING_CHARS,
     MAX_SHEET_CELLS,
     MAX_SHEET_SCAN_CELLS,
-    MAX_TEXT_CHARS,
     MAX_XLSX_UNZIPPED_BYTES,
 )
 
@@ -60,7 +60,7 @@ def rows_to_text(rows: Iterable[Iterable[object]], name: str) -> str:
             continue
         line = f'{values[0]}: {values[1]}' if len(values) == 2 else ' | '.join(values)
         chars += len(line) + 1
-        if chars > MAX_TEXT_CHARS:
+        if chars > MAX_POSTING_CHARS:
             raise FileInputError(
                 InputErrorCode.FILE_TOO_LONG,
                 '표에 글이 너무 많아요. 공고가 있는 부분만 남겨서 다시 넣어 주세요.',

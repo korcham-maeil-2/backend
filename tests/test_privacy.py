@@ -230,3 +230,14 @@ def test_offer_mail_recipient_name_is_not_sent():
     row = state['table'][0]
     assert row['company']['status'] == 'confirmed'
     assert row['annual_salary_krw']['status'] == 'confirmed'
+
+
+def test_long_text_without_spaces_is_fast():
+    """띄어쓰기 없는 긴 글도 빨리 가린다 (이슈 #52: 이메일 규칙이 제곱 시간이라 멈췄다)."""
+    import time
+
+    for text in ('x' * 150_000, 'a.b' * 50_000, '010' * 50_000):
+        started = time.perf_counter()
+        mask_text(text)
+        assert time.perf_counter() - started < 1.0
+    assert mask_text('x' * 10 + ' hong@corp.example') == 'x' * 10 + ' [이메일]'

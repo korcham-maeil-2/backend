@@ -29,6 +29,7 @@ from backend.inputs.limits import (
     DEFAULT_VISION_DAILY_PAGE_LIMIT,
     MAX_FILE_BYTES,
     MAX_FILES,
+    MAX_POSTING_CHARS,
     MAX_TEXT_CHARS,
     MAX_TOTAL_BYTES,
     MAX_VISION_PAGES,
@@ -265,6 +266,17 @@ class FileReader:
                 )
         # 그래프가 정리할 글과 똑같이 이어 붙여 센다 (응답의 input_text로 새 세션을 만들 때
         # 붙여 넣기 상한 MAX_MESSAGE_CHARS를 넘지 않게).
+        # 공고(파일) 하나마다 센다: 공고 여러 개를 비교하는데 합계로 막으면 2~3개만 넣어도 넘는다
+        for r in results:
+            chars = len(r.plain_text.strip()) + len(r.image_text.strip())
+            if chars > MAX_POSTING_CHARS:
+                raise FileInputError(
+                    InputErrorCode.FILE_TOO_LONG,
+                    f'이 파일에서 읽은 글이 {chars:,}자예요. '
+                    f'공고 하나는 {MAX_POSTING_CHARS:,}자까지 정리할 수 있어요. '
+                    '공고가 있는 쪽만 남겨서 넣어 주세요.',
+                    r.name,
+                )
         total = len('\n'.join(graph_messages(message, results)[0]))
         if total > MAX_TEXT_CHARS:
             raise FileInputError(
