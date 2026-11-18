@@ -70,7 +70,8 @@ class SavingsEstimate(OutputModel):
 
 def estimate(monthly_krw: int, rate: float) -> SavingsEstimate:
     """12개월 정기적립 단리: 이자 = 금액 × 연이율 × (12+11+…+1)/12 = 금액 × 연이율 × 6.5."""
-    interest = int(round(monthly_krw * rate / 100 * 6.5, -3))
+    # round()는 .5를 짝수로 보내서(58,500 → 58,000) 직접 반올림한다
+    interest = int(monthly_krw * rate * 6.5 / 100 / 1000 + 0.5) * 1000
     principal = monthly_krw * 12
     return SavingsEstimate(
         monthly_krw=monthly_krw,

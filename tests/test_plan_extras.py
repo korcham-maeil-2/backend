@@ -526,6 +526,7 @@ def test_savings_estimates_come_from_the_backend():
 
     e = estimate(500_000, 3.91)
     assert (e.principal_krw, e.interest_krw, e.total_krw) == (6_000_000, 127_000, 6_127_000)
+    assert estimate(300_000, 3.0).interest_krw == 59_000  # 58,500 → 반올림 (짝수로 가지 않게)
     found = SavingsSource(lambda: SAVINGS).get()
     assert [x.monthly_krw for x in found.estimates] == list(DEPOSITS)
     top = found.products[0].rate

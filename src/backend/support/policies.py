@@ -173,7 +173,10 @@ class LocalSupport(OutputModel):
 
     regions: list[RegionSupport]
     national: list[SupportPolicy] = Field(
-        description='전국 정책 (어느 근무지든 같다). 신청할 수 있는 것만'
+        description=(
+            '전국 정책 (어느 근무지든 같다). 신청할 수 있는 것만. '
+            '앞 MAX_POLICIES개 + 거기 못 든 첫 취업 지원(FIRST_JOB_MAX개까지, 정착 플랜용)'
+        )
     )
     national_matched: int = Field(description='신청할 수 있는 전국 정책 수')
     age: int | None = Field(description='거르는 데 쓴 나이. 없으면 나이로 거르지 않음')

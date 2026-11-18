@@ -244,11 +244,13 @@ def _posting_plan(
         if placed is None:
             continue
         kind, month, item = placed
-        # 통근: 이사·주거 할 일(이사 전·이사한 달·언제든, 날짜 있는 주거 정책)은 넣지 않는다
+        # 통근: 이사·주거 할 일(이사 전·이사한 달·언제든, 날짜 있는 주거 정책)은 넣지 않는다.
+        # 첫 취업 지원(청약통장 등)은 주거로 분류돼도 넣는다
         if not moving and (
             kind in ('before', 'move_month', 'anytime')
             or policy.fit == 'moving'
             and kind == 'month'
+            and not is_first_job(policy)
         ):
             continue
         slots.setdefault((kind, month), []).append(item)
