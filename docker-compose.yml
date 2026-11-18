@@ -23,6 +23,8 @@ services:
       # 브라우저 호출을 허락할 프론트 주소 (쉼표로 여러 개).
       # 배포된 프론트(maeil2-frontend)와 로컬 개발 서버. 바꾸려면 서버 backend/.env에 CORS_ORIGINS=...
       CORS_ORIGINS: ${CORS_ORIGINS:-https://maeil2-frontend.sunghoyaaa.com,http://localhost:3000}
+      # 오류 추적(GlitchTip)에 붙는 배포 버전 (배포 작업이 커밋 번호를 넘긴다). DSN은 backend/.env의 SENTRY_DSN
+      SENTRY_RELEASE: ${SENTRY_RELEASE:-}
     volumes:
       - backend-data:/data
     # 서버 안에서만 열고(127.0.0.1), 바깥에서는 Nginx를 거쳐서만 들어오게 한다
