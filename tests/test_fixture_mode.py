@@ -8,7 +8,10 @@ from conftest import scenario_text
 from fastapi.testclient import TestClient
 
 from backend.main import create_app
-from backend.normalize import ClaudeExtractor, FixtureExtractor, make_extractor, parse_mode
+from backend.normalize import FixtureExtractor, make_extractor, parse_mode
+from backend.normalize.fixture import ExampleFirstExtractor
+from backend.normalize.schema import ExtractionResult
+from backend.privacy import mask_text
 
 
 def test_known_posting_returns_fixture():
@@ -35,7 +38,35 @@ def test_mode_switch():
     assert parse_mode(None) == parse_mode('') == parse_mode(' Claude ') == 'claude'
     assert parse_mode(' Fixture ') == 'fixture'
     assert isinstance(make_extractor('fixture'), FixtureExtractor)
-    assert isinstance(make_extractor('claude'), ClaudeExtractor)
+    assert isinstance(make_extractor('claude'), ExampleFirstExtractor)
+
+
+def test_examples_skip_claude_in_claude_mode(tmp_path):
+    """배포(실제 Claude 모드)에서도 화면이 GET /examples로 받은 예시 글만 넣으면 Claude를 부르지
+    않는다 (비용 0원). 한 글자라도 고쳤거나 다른 공고가 섞이면 Claude를 부른다."""
+    calls: list[str] = []
+
+    def claude(text: str) -> ExtractionResult:
+        calls.append(text)
+        return ExtractionResult(postings=[])
+
+    extract = ExampleFirstExtractor(claude)
+    with TestClient(create_app(str(tmp_path / 'cp.sqlite'), extractor=extract)) as c:
+        examples = c.get('/examples').json()
+        # 화면이 보내는 그대로: 공고 사이를 '---' 줄로 (page.tsx POSTING_SEPARATOR)
+        text = '\n\n---\n\n'.join(examples)
+        table = c.post('/sessions', json={'message': text}).json()['table']
+    assert [row['company']['value'] for row in table] == [
+        '(가상) 이음데이터랩(주)',
+        '(가상) 빛가람그리드(주)',
+    ]
+    assert calls == []
+
+    text = mask_text(text)  # normalize 노드는 가린 글을 넘긴다
+    changed = (text.replace('3,600만원', '3,700만원'), text + '\n처음 보는 공고', ' ', '------')
+    for other in changed:
+        extract(other)
+    assert len(calls) == len(changed)
 
 
 @pytest.mark.parametrize('typo', ['fixtures', 'fake', 'mock'])

@@ -13,6 +13,8 @@
   - 공고 여러 개가 들어 있으면 입력에 나온 순서대로 모두 돌려준다.
   - 모르는 글이면 '공고 없음'(빈 목록)을 돌려준다.
 
+실제 Claude 모드(배포)에서도 글 전체가 시연 공고뿐이면 이 답을 쓴다 (ExampleFirstExtractor).
+
 [한계] 인용이 모두 있어야 맞추므로, 이 모드에서는 '추정'이 나오는 경우를 볼 수 없다.
   같은 공고를 글과 파일로 두 번 넣으면 여기서는 한 행이 되지만, 실제 Claude는 두 행을 낼 수도 있다.
 """
@@ -25,7 +27,7 @@ from typing import Literal
 from backend.normalize.checks import squash
 from backend.normalize.llm import ClaudeExtractor, Extractor
 from backend.normalize.schema import ExtractedPosting, ExtractionResult
-from backend.privacy import mask_quotes
+from backend.privacy import mask_quotes, mask_text
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +36,17 @@ FIXTURES_DIR = Path(__file__).resolve().parents[3] / 'tests' / 'fixtures' / 'nor
 
 # 인용이 너무 적은 답은 아무 글에나 맞아 버린다 → 불러올 때 막는다.
 MIN_QUOTES = 3
+
+# 화면 '예시로 사용법 보기'에 넣는 시연 공고. 화면은 GET /examples로 받는다 (글이 여기 하나뿐이라
+# 화면 글과 미리 써 둔 답이 어긋나 다시 비용이 드는 일이 없다)
+EXAMPLE_IDS = ('near_pangyo', 'down_naju')
+
+
+def example_postings(fixtures_dir: Path = FIXTURES_DIR) -> list[str]:
+    return [
+        (fixtures_dir / f'{pid}.input.txt').read_text(encoding='utf-8').strip()
+        for pid in EXAMPLE_IDS
+    ]
 
 
 def _quotes(posting: ExtractedPosting) -> set[str]:
@@ -87,6 +100,32 @@ class FixtureExtractor:
         return ExtractionResult(postings=[posting for _, posting in ordered])
 
 
+class ExampleFirstExtractor:
+    """실제 Claude 모드에서도 글 전체가 시연 공고({id}.input.txt, 화면의 '예시 공고 넣기')로만
+    되어 있으면 미리 써 둔 응답을 쓴다 (비용 0원). 한 글자라도 고쳤거나 다른 공고가 섞이면 Claude.
+    """
+
+    def __init__(self, claude: Extractor, fixtures_dir: Path = FIXTURES_DIR) -> None:
+        self._claude = claude
+        self._fixture = FixtureExtractor(fixtures_dir)
+        # normalize 노드는 가린 글을 넘긴다 → 시연 글도 같은 규칙으로 가려 맞춘다
+        self._examples = [
+            squash(mask_text(f.read_text(encoding='utf-8')))
+            for f in fixtures_dir.glob('*.input.txt')
+        ]
+
+    def __call__(self, text: str) -> ExtractionResult:
+        # 화면은 공고 여러 개를 '---' 줄로 나눠 한 메시지로 보낸다 (프론트 POSTING_SEPARATOR)
+        whole = squash(text).replace('---', '')
+        rest = whole
+        for example in self._examples:
+            rest = rest.replace(example, '')
+        if whole and not rest:
+            logger.info('시연 공고만 들어와 미리 써 둔 응답을 씁니다 (Claude 호출 없음)')
+            return self._fixture(text)
+        return self._claude(text)
+
+
 NormalizeMode = Literal['claude', 'fixture']
 
 
@@ -105,8 +144,8 @@ def parse_mode(raw: str | None) -> NormalizeMode:
 
 
 def make_extractor(mode: NormalizeMode) -> Extractor:
-    """fixture면 미리 써 둔 응답, claude면 실제 Claude."""
+    """fixture면 미리 써 둔 응답, claude면 실제 Claude (시연 공고만 들어오면 미리 써 둔 응답)."""
     if mode == 'fixture':
         logger.warning('NORMALIZE_MODE=fixture: 실제 Claude 대신 미리 써 둔 응답을 씁니다')
         return FixtureExtractor()
-    return ClaudeExtractor()
+    return ExampleFirstExtractor(ClaudeExtractor())
