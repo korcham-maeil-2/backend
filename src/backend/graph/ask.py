@@ -1,7 +1,11 @@
 """되묻기 (이슈 #13) — 계산에 꼭 필요한 값이 비어 있으면 계산 전에 사용자에게 다시 묻는다.
 
 check_missing 노드(graph/nodes.py)가 이 질문으로 그래프를 멈추고(interrupt),
-사용자가 답하면(POST /sessions/{id}/answers) 답을 사용자 정보에 넣고 계산을 이어 간다.
+답하면 계산을 이어 간다.
+답하는 길은 둘이다:
+  - 화면: 원래 생활비 칸에 답을 넣고 지금 폼 값을 통째로 POST /sessions/{id}/confirm에 다시 보낸다
+    (질문 중에 고친 다른 칸·비교표도 함께 반영된다). '모르겠어요'는 skip_missing=true로 보낸다.
+  - API: POST /sessions/{id}/answers로 질문한 값만 보낸다 (apply_answers).
 
 묻는 값 (없으면 매달 남는 돈을 아예 못 구하는 것만):
   current_housing  지금 집 주거비 — '지금 집에서 통근'이 해당되는 공고가 있을 때 (거주지 정보)
@@ -16,11 +20,12 @@ check_missing 노드(graph/nodes.py)가 이 질문으로 그래프를 멈추고(
 질문 문장은 코드가 정해진 틀로 만든다 (Claude를 부르지 않는다: 시연 중 비용·지연 없음).
 """
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field
 
 from backend.calc.remaining import UserProfile
+from backend.normalize.schema import MAX_KRW
 
 ASK_MISSING = 'ask_missing'
 FIXED_FROM_ANSWER = '고정비 (되물음에 답한 합계)'
@@ -39,7 +44,8 @@ class Question(BaseModel):
 class Answers(BaseModel):
     """POST /sessions/{id}/answers 요청. 모르는 값은 null로 보내면 비워 둔 채 계산한다."""
 
-    answers: dict[AskKey, int | None] = Field(
+    # 금액은 0 이상 MAX_KRW 이하 정수만 (음수·아주 큰 수·true 같은 값은 422로 막는다)
+    answers: dict[AskKey, Annotated[int, Field(ge=0, le=MAX_KRW, strict=True)] | None] = Field(
         default_factory=dict,
         description="질문 key → 월 금액(원). 모르면 null (예: {'current_housing': 300000})",
     )

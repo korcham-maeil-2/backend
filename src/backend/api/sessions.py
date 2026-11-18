@@ -49,6 +49,7 @@ from backend.calc.remaining import UserProfile
 from backend.calc.summary import calculate_all
 from backend.graph import nodes
 from backend.graph.ask import ASK_MISSING, Answers
+from backend.graph.nodes import confirm_update
 from backend.inputs.errors import FileInputError, ReadError
 from backend.inputs.limits import MAX_MESSAGE_CHARS
 from backend.inputs.read import (
@@ -331,16 +332,13 @@ async def confirm_table(session_id: str, body: ConfirmRequest, request: Request)
     async with _locked(session_id):
         current = await _snapshot(graph, session_id)
         if current.status == 'awaiting_answer':
-            # 되묻기를 기다리는 중에 생활비 화면에서 고쳐 다시 계산을 눌렀다:
-            # 보낸 값으로 '확인을 다시 한 것처럼' 저장하고 check_missing부터 다시 돈다
-            # (고친 값으로 빈 값이 채워졌으면 묻지 않고 계산까지 간다).
-            data = body.model_dump(mode='json')
-            update = {'table_confirmed': body.approved}
-            if body.table is not None:
-                update['table'] = data['table']
-            if body.profile is not None:
-                update['user_profile'] = data['profile']
+            # 되묻기 중에 생활비 화면에서 답하거나 고쳐서 다시 확인했다: 보낸 값으로
+            # '확인을 다시 한 것처럼' 저장하고 check_missing부터 다시 돈다
+            # (confirm_table 노드와 같은 confirm_update).
+            # 빈 값이 채워졌거나 skip_missing이면 묻지 않고 계산까지 간다.
             config = _config(session_id)
+            values = (await graph.aget_state(config)).values
+            update = confirm_update(values, body.model_dump(mode='json'))
             await graph.aupdate_state(config, update, as_node='confirm_table')
             await graph.ainvoke(None, config)
             return await _snapshot(graph, session_id)

@@ -133,3 +133,88 @@ def test_answers_only_while_waiting(tmp_path):
             f'/sessions/{sid}/confirm', json={'approved': True, 'profile': pangyo_profile()}
         ).json()
         assert done['status'] == 'completed'
+
+
+# ── 리뷰 반영 (frontend#29 리뷰): 답은 지금 폼 값을 통째로 /confirm으로 다시 보낸다 ──
+
+
+def ask_first(c: TestClient, **overrides) -> str:
+    """지금 집 주거비를 비우고 확인 → 되묻기에서 멈춘 세션."""
+    sid = start(c)
+    asked = c.post(
+        f'/sessions/{sid}/confirm',
+        json={'approved': True, 'profile': pangyo_profile(current_housing=None, **overrides)},
+    ).json()
+    assert asked['status'] == 'awaiting_answer'
+    return sid
+
+
+def commute_of(done: dict) -> dict:
+    return next(s for s in done['result']['postings'][0]['scenarios'] if s['case'] == 'commute')
+
+
+def test_answer_with_whole_form_uses_values_edited_while_asking(tmp_path):
+    """질문이 떠 있는 동안 다른 칸(통근 교통비)을 고치고 답해도, 고친 값으로 계산한다."""
+    with api(tmp_path) as c:
+        sid = ask_first(c)
+        profile = pangyo_profile()  # 주거비를 채운 지금 폼 값
+        profile['postings']['posting-1']['commute_transport'] = {'value': 222_000}
+        done = c.post(f'/sessions/{sid}/confirm', json={'approved': True, 'profile': profile})
+        done = done.json()
+        assert done['status'] == 'completed'
+        assert commute_of(done)['transport']['value'] == 222_000
+        assert done['profile']['postings']['posting-1']['commute_transport']['value'] == 222_000
+
+
+def test_answer_with_edited_table_keeps_the_edit(tmp_path):
+    """질문 중에 비교표를 고쳐 함께 보내면 고친 표로 계산한다 (표가 되돌아가지 않는다)."""
+    with api(tmp_path) as c:
+        sid = ask_first(c)
+        table = c.get(f'/sessions/{sid}').json()['table']
+        table[0]['company']['value'] = '고친 회사명'
+        table[0]['company']['status'] = 'user_input'
+        done = c.post(
+            f'/sessions/{sid}/confirm',
+            json={'approved': True, 'table': table, 'profile': pangyo_profile()},
+        ).json()
+        assert done['table'][0]['company']['value'] == '고친 회사명'
+        assert done['result']['postings'][0]['company'] == '고친 회사명'
+
+
+def test_reconfirm_with_empty_table_keeps_table(tmp_path):
+    """빈 표([])를 보내면 원래 표를 쓴다 (confirm_table 노드와 같은 처리)."""
+    with api(tmp_path) as c:
+        sid = ask_first(c)
+        done = c.post(
+            f'/sessions/{sid}/confirm',
+            json={'approved': True, 'table': [], 'profile': pangyo_profile()},
+        ).json()
+        assert done['status'] == 'completed' and len(done['table']) == 1
+
+
+def test_skip_keeps_typed_values_and_does_not_ask_again(tmp_path):
+    """'모르겠어요, 이대로 계산': 써 둔 다른 값은 그대로 쓰고, 빈 값은 묻지 않고 '계산 못 함'."""
+    with api(tmp_path) as c:
+        sid = ask_first(c)
+        profile = pangyo_profile(current_housing=None)
+        profile['postings']['posting-1']['commute_transport'] = {'value': 111_000}
+        done = c.post(
+            f'/sessions/{sid}/confirm',
+            json={'approved': True, 'profile': profile, 'skip_missing': True},
+        ).json()
+        assert done['status'] == 'completed'
+        assert commute_of(done)['monthly_remaining'] is None
+        assert commute_of(done)['transport']['value'] == 111_000
+        # 다음 확인에서 다시 빈 값이면 다시 묻는다 (건너뛰기는 그 확인 한 번만)
+        sid2 = ask_first(c)
+        assert c.get(f'/sessions/{sid2}').json()['status'] == 'awaiting_answer'
+
+
+def test_answers_are_validated(tmp_path):
+    """음수·아주 큰 수·true는 422 (예전: -5는 조용히 건너뛰고, 큰 수는 500, true는 1원)."""
+    with api(tmp_path) as c:
+        sid = ask_first(c)
+        for bad in (-5, 10**16, True, '300000', 1.5):
+            r = c.post(f'/sessions/{sid}/answers', json={'answers': {'current_housing': bad}})
+            assert r.status_code == 422, bad
+        assert c.get(f'/sessions/{sid}').json()['status'] == 'awaiting_answer'
