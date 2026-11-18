@@ -28,7 +28,7 @@ from backend.main import create_app
 from backend.normalize import build_rows
 from backend.normalize.checks import region_by_code
 from backend.support import SupportError, YouthCenterClient, find_local_support
-from backend.support.policies import MAX_POLICIES, select_policies
+from backend.support.policies import FIRST_JOB_MAX, MAX_POLICIES, select_policies
 from backend.support.youthcenter import URL
 
 FIXTURES = Path(__file__).parent / 'fixtures' / 'support'
@@ -576,6 +576,9 @@ def test_demo_regions_list_local_support_with_sources():
     assert out['national'] and out['national_matched'] >= len(out['national'])
     assert all(p['scope'] == 'national' for p in out['national'])
     assert len({p['id'] for p in out['national']}) == len(out['national'])
+    # 보여 줄 10개에 못 든 '입사하면 챙겨 볼 것'(첫 취업 누구나)도 정착 플랜용으로 함께 온다
+    extra = [p['name'] for p in out['national'][MAX_POLICIES:]]
+    assert '직장인 든든한 한끼' in extra and len(extra) <= FIRST_JOB_MAX
     assert out['source_url'] == 'https://www.youthcenter.go.kr'
     assert out['checked_on'] == '2026-11-15'
     assert out['age'] == 27 and out['notes'] == []

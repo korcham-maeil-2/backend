@@ -36,18 +36,13 @@ from backend.calc.remaining import OutputModel
 from backend.calc.summary import CalculationResult
 from backend.normalize.schema import ComparisonRow
 from backend.public_data.training import ncs_for_job
-from backend.support.policies import LocalSupport, SupportPolicy
+from backend.support.policies import FIRST_JOB_MAX, LocalSupport, SupportPolicy, is_first_job
 
 MONTHS = 12
 ANYTIME_MAX = 5
 # '전월세'(예: 청년 전월세 대출보증)는 보증금 대출이라 이사 전 — '월세'보다 먼저 본다
 _DEPOSIT_WORDS = re.compile(r'보증금|전세|전월세|버팀목|보증부')
 _RENT_WORDS = re.compile(r'월세')
-# '입사하면 챙겨 볼 것': 첫 취업이면 누구나 해당하는 전국 상시 지원
-# (이름에서만 찾는다. 구직자용은 뺀다)
-_START_WORDS = re.compile(r'국민연금|학자금|청약|자산형성|직장인|재직')
-_NOT_START_WORDS = re.compile(r'구직|취업준비|면접|일경험|인턴|창업|상담')
-START_MAX = 5
 
 ItemKind = Literal['deposit', 'move_in', 'policy']
 SlotKind = Literal['before', 'move_month', 'month', 'start', 'anytime']
@@ -169,11 +164,7 @@ def _place_policy(
             return 'before', None, _policy_item(policy, when)
         if policy.fit == 'moving' and _RENT_WORDS.search(policy.name):
             return 'move_month', None, _policy_item(policy, when)
-        if (
-            policy.scope == 'national'
-            and _START_WORDS.search(policy.name)
-            and not _NOT_START_WORDS.search(policy.name)
-        ):
+        if is_first_job(policy):  # 입사하면 챙겨 볼 것 (support/policies.py)
             return 'start', None, _policy_item(policy, when)
         if policy.fit != 'moving':
             return None  # 그 밖의 상시 일반 정책은 넣지 않는다 (모듈 설명)
@@ -268,8 +259,8 @@ def _posting_plan(
             '청년 지원 목록에서 볼 수 있어요.'
         )
         slots[('anytime', None)] = anytime[:ANYTIME_MAX]
-    if len(start := slots.get(('start', None), [])) > START_MAX:
-        slots[('start', None)] = start[:START_MAX]
+    if len(start := slots.get(('start', None), [])) > FIRST_JOB_MAX:
+        slots[('start', None)] = start[:FIRST_JOB_MAX]
 
     order = {'before': 0, 'move_month': 1, 'month': 2, 'start': 3, 'anytime': 4}
     built = []
