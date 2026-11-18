@@ -127,7 +127,6 @@ def test_company_housing_resident_gets_no_deposit_or_housing_support():
     assert slots['이사한 달'] == ['전입신고']  # 사택 주소로 전입신고는 한다
     [move_in] = [s for s in plan.postings[0].slots if s.kind == 'move_month'][0].items
     assert '회사에 먼저 물어보세요' in move_in.detail
-    assert any('사택·기숙사' in note for note in plan.postings[0].notes)
 
 
 def test_company_housing_but_renting_keeps_the_deposit():

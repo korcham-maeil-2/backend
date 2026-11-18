@@ -251,11 +251,6 @@ def _posting_plan(
             for p in regional + national
             if p.fit != 'targeted' and not (dorm and p.fit == 'moving' and not is_first_job(p))
         ]
-        if dorm:
-            notes.append(
-                '사택·기숙사에 들어가는 것으로 보고 '
-                '보증금 마련과 집 구하기·월세 지원은 넣지 않았어요.'
-            )
     else:
         # 통근이면 이사·주거 할 일은 없고, 사는 곳을 몰라 지역 정책도 넣지 않는다 (전국 정책만)
         policies = [p for p in national if p.fit != 'targeted']
