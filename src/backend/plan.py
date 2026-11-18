@@ -232,7 +232,7 @@ def _posting_plan(
     today: date,
     dorm: bool = False,
 ) -> PostingPlan:
-    """공고 하나의 플랜. dorm: 이사하면서 회사 사택·기숙사에 들어간다 (build_plan의 _in_dorm)."""
+    """공고 하나의 플랜. dorm: 이사하면서 회사 사택·기숙사에 들어간다 (build_plan에서 정한다)."""
     last = _add_months(today.replace(day=1), MONTHS)
     loc = row.location.value if row else None
     region = ' '.join(x for x in (loc.sido, loc.sigungu) if x) or None if loc else None

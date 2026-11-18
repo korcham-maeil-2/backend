@@ -500,6 +500,10 @@ _PARTICLE = re.compile(r'(를|가|는|와)(?![가-힣])|로(?=(?:도|만|는|부
 _FIXED = {'를': '을', '가': '이', '는': '은', '와': '과', '로': '으로'}
 
 
+# 자리표시 바로 앞의 낱말 '약' ('절약', '계약' 같은 낱말 끝 글자는 아니다)
+_ABOUT_BEFORE = re.compile(r'(?:^|[\s(])약\s*$')
+
+
 def render(draft: str, amounts: Amounts) -> str:
     """검사를 통과한 초안의 자리표시를 금액 글자로 바꾼다."""
     out, pos = [], 0
@@ -508,7 +512,7 @@ def render(draft: str, amounts: Amounts) -> str:
             raise ValueError(f'검사하지 않은 자리표시: {r.text}')
         text = _format(r.value)
         # AI가 '약 {{A3}}'처럼 '약'을 따로 썼으면 겹치지 않게 ('약 약 196만원')
-        if text.startswith('약 ') and draft[pos : r.start].rstrip().endswith('약'):
+        if text.startswith('약 ') and _ABOUT_BEFORE.search(draft[pos : r.start]):
             text = text.removeprefix('약 ')
         out += [draft[pos : r.start], text]
         pos = r.end
