@@ -178,14 +178,9 @@ def _course(raw: dict[str, Any], kind: Kind) -> Course | None:
     )
 
 
-# 공고 직무 → NCS 대분류 (고용24 ncsCd 앞 2자리). 낱말로만 고르고, 모르면 None (직무로 고르지 않음)
+# 공고 직무 → NCS 대분류 (ncsCd 앞 2자리), 모르면 None. 틀리면 '모름'보다 나빠서
+# 하는 일을 업종보다 먼저 보고('자동차 영업'은 영업), 겹치는 낱말은 좁힌다 (테스트에 예시)
 _JOB_NCS = (
-    # 틀리게 고르면 '모름'보다 나쁘다 (엉뚱한 강의에 '직무 관련'이 붙는다). 그래서
-    # - 하는 일(디자인·개발·영업·사무)을 업종(자동차·반도체·건설)보다 먼저 본다
-    #   ('자동차 영업'은 영업)
-    # - 겹치는 낱말은 좁힌다: '개발자'만('연구개발' 아님), 영문 약어는 단어로만('RETAIL'의 AI 아님),
-    #   '영상의학'·'방송통신'·'데이터 입력'·'인사이트'·'전자상거래'는 뺀다.
-    #   '보안'·'서버'는 경비·홀서버와 겹쳐 안 쓴다
     ('08', re.compile(r'디자인|디자이너|영상(?!의학)|방송(?!통신)')),
     (
         '20',
@@ -236,8 +231,7 @@ def pick_courses(
         if c.institute is not None:
             per[c.institute] += 1
         out.append(c)
-    # 직무에 맞는 과정부터 채우고, 단계마다 무료 과정에 먼저 자리를 준다 (합쳐 FREE_SLOTS개까지).
-    # 직무에 맞는 과정으로 다 차면 직무와 무관한 무료 과정은 넣지 않는다
+    # 직무에 맞는 과정부터 채우고, 단계마다 무료 과정에 먼저 자리를 준다 (합쳐 FREE_SLOTS개까지)
     picked: list[Course] = []
     for tier in (False, True):
         group = [c for c in out if order(c)[0] == tier]
@@ -255,12 +249,9 @@ class TrainingSource:
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._fetch, self._kinds, self._clock = fetch, kinds, clock
-        # (시군구, 날짜, 직무, 범위) → (만료 시각, 결과). 날짜가 바뀌면 새로 묻는다.
-        # 다 받았으면 CACHE_SECONDS, 한 종류라도 실패했으면 FAILURE_COOLDOWN_SECONDS만 둔다
-        # (실패한 쪽을 페이지를 열 때마다 다시 기다리지 않게, 그래도 곧 다시 묻게)
+        # (시군구, 날짜, 직무, 범위) → (만료 시각, 결과). 한 종류라도 실패하면 쿨다운만큼만 둔다
         self._cache: dict[tuple[str, date, str | None, str], tuple[float, TrainingList]] = {}
-        # 지역마다 잠금: 같은 지역을 동시에 물으면(직무만 다른 공고 둘) 한 번만 조회하고,
-        # 다른 지역은 기다리지 않는다
+        # 지역마다 잠금: 같은 지역은 한 번만 조회하고, 다른 지역은 기다리지 않는다
         self._locks: dict[str, threading.Lock] = {}
 
     def _kind(
@@ -303,10 +294,8 @@ class TrainingSource:
     def _collect(
         self, lawd_cd: str, today: date
     ) -> tuple[list[Course], Literal['sigungu', 'sido'], list[Kind]]:
-        """시군구에서 먼저 찾고, 날짜로 거른 뒤 모든 종류를 합쳐도 없을 때만
-        시도로 넓힌다 (명세 8절).
-        종류마다 따로 넓히면 시군구 과정과 시도 과정이 섞여 화면의 범위 안내('시군구에는 과정이
-        없어 시도 과정')가 틀리므로, 범위는 목록 전체에 하나로 둔다.
+        """시군구에서 찾고, 모든 종류가 비었을 때만 시도로 넓힌다 (명세 8절).
+        종류마다 넓히면 시군구·시도 과정이 섞여 화면의 범위 안내가 틀린다.
         돌려주는 값: (과정, 범위, 실패한 종류)"""
         courses, failed = self._gather(self._kinds, lawd_cd, lawd_cd, today)
         if courses:
@@ -325,8 +314,8 @@ class TrainingSource:
             return base
         courses = base.courses
         if ncs:
-            # 직무 과정은 직무 조건으로 한 번 더 묻는다: 시작일 순 100개 안에는 직무 과정이 적다
-            # (판교 정보통신 62개 중 7개, 2026-11-18). 범위는 기본 목록과 같게 (scope 안내가 맞게)
+            # 시작일 순 100개 안에는 직무 과정이 적어(판교 정보통신 62개 중 7개, 2026-11-18)
+            # 직무 조건으로 한 번 더 묻는다. 범위는 기본 목록과 같게
             courses = self._load(lawd_cd, today, ncs, base.scope).courses + courses
         return base.model_copy(update={'courses': pick_courses(courses, today, ncs=ncs)})
 
@@ -381,8 +370,7 @@ class TrainingSource:
                 courses=courses,  # 고르기 전 전부 (get이 고른다)
                 status='ok',
             )
-        # 지난 날짜 결과는 다시 쓰지 않으므로 지운다 (메모리가 날마다 쌓이지 않게)
-        # (다른 지역 잠금과 겹칠 수 있어 목록을 먼저 떠 두고, 없는 열쇠도 넘어간다)
+        # 지난 날짜는 지운다 (다른 지역 잠금과 겹칠 수 있어 목록을 떠 두고 pop)
         for old in [k for k in list(self._cache) if k[1] != today]:
             self._cache.pop(old, None)
         ttl = FAILURE_COOLDOWN_SECONDS if failed else CACHE_SECONDS
