@@ -24,6 +24,7 @@ from langgraph.graph import END
 from langgraph.types import interrupt
 
 from backend.calc.summary import calculate_all
+from backend.graph.ask import ASK_MISSING, apply_answers, missing_questions
 from backend.graph.state import GraphState
 from backend.normalize import Extractor, build_rows
 from backend.privacy import mask_text
@@ -105,13 +106,49 @@ def confirm_table(state: GraphState) -> dict[str, Any]:
     """
     answer = interrupt({'type': CONFIRM_TABLE, 'table': state.get('table', [])})
 
-    # 사용자가 표를 고쳐서 보냈으면 그 표를, 아니면 원래 표를 쓴다.
+    return confirm_update(state, answer)
+
+
+def confirm_update(state: GraphState, answer: dict[str, Any]) -> dict[str, Any]:
+    """확인 답 → 바꿀 상태 칸. confirm_table 노드와, 되묻기 중에 다시 확인하는 API
+    (POST /sessions/{id}/confirm, api/sessions.py)가 같이 쓴다 (두 곳의 처리가 어긋나지 않게).
+
+    answer: {"approved": bool, "table": [...] | None, "profile": {...} | None, "skip_missing": bool}
+    """
+    # 사용자가 표를 고쳐서 보냈으면 그 표를, 아니면(없음·빈 표) 원래 표를 쓴다.
     table = answer.get('table') or state.get('table', [])
-    update = {'table': table, 'table_confirmed': bool(answer.get('approved', True))}
+    update = {
+        'table': table,
+        'table_confirmed': bool(answer.get('approved', True)),
+        # '모르겠어요, 이대로 계산': 이번 확인에서는 빈 값을 묻지 않고 계산한다 (check_missing)
+        'skip_missing': bool(answer.get('skip_missing', False)),
+    }
     # 사용자 정보는 보냈을 때만 바꾼다 (안 보내면 이미 있던 값을 그대로 둔다)
     if answer.get('profile') is not None:
         update['user_profile'] = answer['profile']
     return update
+
+
+def check_missing(state: GraphState) -> dict[str, Any]:
+    """되묻기 (이슈 #13): 계산을 막는 값이 비어 있으면 사용자에게 묻고 기다린다 (graph/ask.py).
+
+    confirm_table과 같은 방식으로 멈춘다: 처음 실행에서 interrupt()가 질문을 내보내고,
+    POST /sessions/{id}/answers가 Command(resume={'answers': {...}})로 깨우면 이 함수가 처음부터
+    다시 돌며 interrupt()가 그 답을 돌려준다. 질문을 고르는 일은 상태만 보므로 다시 돌아도 같다.
+    빠진 값이 없으면 아무것도 바꾸지 않고 지나간다.
+    화면은 /answers 대신 /confirm에 지금 폼 값을 다시 보낸다: 확인을 다시 한 것처럼 저장되고
+    이 노드부터 다시 돈다 (api/sessions.py). 그때 빈 값이 채워졌으면 묻지 않고 지나간다.
+    """
+    if state.get('skip_missing'):
+        return {}  # 사용자가 '모르겠어요, 이대로 계산'을 골랐다: 빈 값은 '계산 못 함'으로 둔다
+    questions = missing_questions(state.get('table'), state.get('user_profile'))
+    if not questions:
+        return {}
+    answer = interrupt(
+        {'type': ASK_MISSING, 'questions': [q.model_dump(mode='json') for q in questions]}
+    )
+    answers = (answer or {}).get('answers') or {}
+    return {'user_profile': apply_answers(state['user_profile'], answers)}
 
 
 def table_lawd_codes(table: list[dict] | None) -> set[str]:

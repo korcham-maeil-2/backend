@@ -31,7 +31,8 @@ from backend.support import LocalSupport
 #   awaiting_confirmation: 비교표 확인을 기다리며 멈춰 있음
 #   completed: 끝까지 실행됨
 #   running: 그 밖의 경우 (지금 구조에선 거의 나오지 않음)
-SessionStatus = Literal['awaiting_confirmation', 'completed', 'running']
+# awaiting_answer: 계산을 막는 빈 값을 되묻고 답을 기다림 (pending.type='ask_missing', 이슈 #13)
+SessionStatus = Literal['awaiting_confirmation', 'awaiting_answer', 'completed', 'running']
 
 
 class MessageRequest(BaseModel):
@@ -64,6 +65,13 @@ class ConfirmRequest(BaseModel):
             '보내면 월 잔여액·손익분기 연봉을 계산한다. 안 보내면 세후 월급까지만 계산'
         ),
     )
+    skip_missing: bool = Field(
+        default=False,
+        description=(
+            "되묻기 중 '모르겠어요, 이대로 계산': 빈 값을 묻지 않고 계산한다 "
+            "('계산 못 함'으로 보임). 되묻기에 답할 때는 false로 지금 폼 값을 통째로 보낸다"
+        ),
+    )
 
 
 class RecalculateRequest(BaseModel):
@@ -83,7 +91,12 @@ class RecalculateRequest(BaseModel):
 class PendingQuestion(BaseModel):
     """그래프가 멈춘 이유와, 화면에 보여 줄 내용."""
 
-    type: str = Field(description='멈춘 이유. 지금은 confirm_table 하나')
+    type: str = Field(
+        description=(
+            '멈춘 이유: confirm_table(비교표 확인) 또는 ask_missing(빈 값 되묻기, '
+            'payload.questions에 질문 목록)'
+        )
+    )
     payload: dict[str, Any]
 
 

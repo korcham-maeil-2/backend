@@ -45,6 +45,7 @@ class ErrorCode(StrEnum):
     SESSION_NOT_FOUND = 'SESSION_NOT_FOUND'  # 404: 없는 세션 ID
     SESSION_NOT_AWAITING_CONFIRMATION = 'SESSION_NOT_AWAITING_CONFIRMATION'  # 409
     SESSION_NOT_COMPLETED = 'SESSION_NOT_COMPLETED'  # 409: 계산이 끝나지 않은 세션
+    SESSION_NOT_AWAITING_ANSWER = 'SESSION_NOT_AWAITING_ANSWER'  # 409: 되묻기를 기다리지 않음
     REGION_NOT_FOUND = 'REGION_NOT_FOUND'  # 404: 월세를 조회할 수 없는 시군구 코드
     NORMALIZE_FAILED = 'NORMALIZE_FAILED'  # 502: 공고 정리(Claude 호출) 실패
     # 파일 올리기 (backend/inputs). 422는 사용자가 파일을 바꾸면 해결된다.

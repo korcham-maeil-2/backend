@@ -39,6 +39,10 @@ class GraphState(TypedDict, total=False):
     # 사용자가 비교표를 확인했는지 여부.
     table_confirmed: bool
 
+    # 비교표 확인 때 '모르겠어요, 이대로 계산'을 골랐는지. True면 check_missing이 되묻지 않는다.
+    # 확인할 때마다 새로 정한다 (graph/nodes.py confirm_update).
+    skip_missing: bool
+
     # 사용자 정보 (지금 집 주거비, 공고별 통근·이사 비용, 고정비 등).
     # 모양은 backend/calc/remaining.py의 UserProfile. 없으면 잔여액은 null로 계산된다.
     user_profile: dict[str, Any] | None
