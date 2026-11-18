@@ -319,6 +319,23 @@ def test_literal_amount_is_rewritten_with_feedback(caplog):
     assert '리포트 검증 실패 (1번째)' in caplog.text  # 이슈 완료 조건: 재작성이 로그로 확인
 
 
+def test_same_facts_reuse_verified_report_without_claude():
+    """같은 계산 결과면 검증을 통과한 리포트를 다시 쓴다 (예시 둘러보기: 비용 0원).
+    검증을 통과하지 못한 리포트는 기억하지 않고, 계산 결과가 다르면 새로 쓴다."""
+    blocked = ['막힌 초안'] * MAX_ATTEMPTS
+    writer = FakeWriter(*blocked, '보여 줄 리포트 (추정)', '다른 결과 리포트 (추정)')
+    agent = ReportAgent(writer, FakeReviewer(*[['틀린 말']] * MAX_ATTEMPTS, [], []))
+    assert agent.run(pangyo_state())['report'] is None  # 끝까지 막힘 → 숨김 (기억하지 않는다)
+    first = agent.run(pangyo_state())
+    assert first['report'] == '보여 줄 리포트 (추정)'
+    again = agent.run(pangyo_state())
+    assert (again['report'], again['report_check']) == (first['report'], first['report_check'])
+    assert len(writer.calls) == MAX_ATTEMPTS + 1  # 세 번째 run은 Claude를 부르지 않았다
+    other = pangyo_state()
+    other['result']['postings'][0]['scenarios'][0]['monthly_remaining'] += 10_000
+    assert agent.run(other)['report'] == '다른 결과 리포트 (추정)'
+
+
 def test_reviewer_problem_also_triggers_rewrite():
     writer = FakeWriter('첫 초안 (추정)', '고친 초안 (추정)')
     reviewer = FakeReviewer(['청년 지원금을 남는 돈에 더했어요'], [])

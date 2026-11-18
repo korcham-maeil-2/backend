@@ -12,11 +12,17 @@
 
 설계 원칙: 숫자는 코드가 계산하고, 문장만 LLM이 쓴다. 그 문장 속 숫자도 코드가 다시 확인한다.
 Claude 호출이 실패해도(키 없음·한도 초과 등) 계산 결과는 그대로 보여 준다 (status=unavailable).
+검증을 통과한 리포트는 넘긴 사실(facts)별로 기억해 둔다 → 같은 계산 결과면 Claude를 다시
+부르지 않는다 (예시 공고 둘러보기처럼 모두 같은 값을 넣는 경우 비용 0원).
 """
 
+import copy
+import hashlib
 import json
 import logging
 import re
+import threading
+from collections import OrderedDict
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from typing import Any, Literal, Protocol
@@ -31,6 +37,7 @@ from backend.report.facts import build_facts, check_draft, missing_estimate_word
 logger = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 3  # 처음 쓰기 1번 + 다시 쓰기 2번
+SAVED_REPORTS = 100  # 기억해 둘 검증 통과 리포트 수 (서버 메모리, 다시 켜면 비워진다)
 # 한 번 부를 때 기다리는 최대 시간(초)과 SDK 재시도 횟수. 다시 계산하면 응답이 이 동안 막힌다.
 # (실측 최대: 쓰기 약 16초, Haiku 검토 약 14초. API가 느린 날을 위해 넉넉히 둔다)
 WRITER_TIMEOUT, REVIEWER_TIMEOUT, MAX_RETRIES = 60.0, 30.0, 1
@@ -359,15 +366,39 @@ class ReportAgent:
     def __init__(self, writer: Writer, reviewer: Reviewer | None = None) -> None:
         self._write = writer
         self._review = reviewer
+        # facts 지문 → 검증 통과 리포트 (_done 결과). 그래프 노드·다시 계산이 스레드에서 같이 쓴다
+        self._saved: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self._saved_lock = threading.Lock()
+
+    def _saved_for(self, facts: dict) -> dict[str, Any] | None:
+        key = _fingerprint(facts)
+        with self._saved_lock:
+            done = self._saved.get(key)
+            if done is not None:
+                self._saved.move_to_end(key)
+        return copy.deepcopy(done)  # 받는 쪽이 고쳐도 기억해 둔 것은 그대로 (None이면 None)
+
+    def _save(self, facts: dict, done: dict[str, Any]) -> dict[str, Any]:
+        key = _fingerprint(facts)
+        with self._saved_lock:
+            self._saved[key] = copy.deepcopy(done)
+            self._saved.move_to_end(key)
+            while len(self._saved) > SAVED_REPORTS:
+                self._saved.popitem(last=False)
+        return done
 
     # ── 그래프 노드 한 단계씩 ──
 
     def write(self, state: dict[str, Any]) -> dict[str, Any]:
-        """리포트 초안 쓰기. 앞 검증에서 문제가 나왔으면 그것을 고쳐 다시 쓴다."""
+        """리포트 초안 쓰기. 앞 검증에서 문제가 나왔으면 그것을 고쳐 다시 쓴다.
+        같은 사실로 검증을 통과한 리포트가 있으면 쓰지 않고 그것을 확정한다 (Claude 호출 없음)."""
         problems = state.get('report_problems') or []
         retry = bool(problems) and state.get('report_draft') is not None
         attempts = (state.get('report_attempts') or 0) + 1 if retry else 1
         facts, _ = build_facts(state.get('result'), state.get('local_support'), state.get('table'))
+        if not retry and (saved := self._saved_for(facts)):
+            logger.info('같은 계산 결과의 검증된 리포트를 다시 씁니다 (Claude 호출 없음)')
+            return saved
         try:
             draft = self._write(facts, state.get('report_draft') if retry else None, problems)
         except ReportError as e:
@@ -406,16 +437,15 @@ class ReportAgent:
                 blocking = any(getattr(f, 'blocking', True) for f in findings)
         if not problems:
             logger.info('리포트 검증 통과 (%d번째)', attempts)
-            return _done(report, ReportCheck(status='verified', attempts=attempts))
+            check = ReportCheck(status='verified', attempts=attempts)
+            return self._save(facts, _done(report, check))
         if not blocking and attempts >= 2:
             # 추정 표시·빠진 값 안내만 남음: 한 번 고치게 했으니 보여 준다 (숨기는 것보다 낫다)
             logger.info(
                 '리포트 가벼운 문제만 남아 보여 줌 (%d번째): %s', attempts, ' / '.join(problems)
             )
-            return _done(
-                report,
-                ReportCheck(status='verified', attempts=attempts, problem_count=len(problems)),
-            )
+            check = ReportCheck(status='verified', attempts=attempts, problem_count=len(problems))
+            return self._save(facts, _done(report, check))
         logger.warning('리포트 검증 실패 (%d번째): %s', attempts, ' / '.join(problems))
         if attempts >= MAX_ATTEMPTS:
             return _done(
@@ -473,6 +503,12 @@ def _done(report: str | None, check: ReportCheck) -> dict[str, Any]:
         'report_draft': None,
         'report_problems': None,
     }
+
+
+def _fingerprint(facts: dict) -> str:
+    """넘길 사실의 지문. 같은 사실이면 같은 리포트를 써도 된다 (개인정보는 없다: facts.py)."""
+    text = json.dumps(facts, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(text.encode()).hexdigest()
 
 
 def _final(values: dict[str, Any]) -> dict[str, Any]:
