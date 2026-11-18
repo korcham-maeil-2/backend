@@ -32,7 +32,7 @@ from typing import Literal
 
 from pydantic import Field
 
-from backend.calc.remaining import OutputModel
+from backend.calc.remaining import OutputModel, housing_aid
 from backend.calc.summary import CalculationResult
 from backend.normalize.schema import ComparisonRow
 from backend.public_data.training import ncs_for_job
@@ -342,13 +342,16 @@ def build_plan(
         move = next((s for s in posting.scenarios if s.case == 'move'), None)
         moving = bool(move and move.applicable)
         # 사택·기숙사에 들어가는지: 공고에 사택·기숙사가 있고, 이사할 집 주거비를 0원으로 넣었다.
-        # 주거비를 넣었으면 따로 집을 구하는 것으로 본다
-        # (화면 profile.ts livesInCompanyHousing과 같은 규칙)
+        # 주거비를 넣었으면 따로 집을 구하는 것으로 본다. 주거지원비가 있으면 이사 주거비가
+        # '넣은 금액 − 지원비'(0원 아래로 안 내려감)라 0원이어도 넣은 금액을 알 수 없다
+        # → 사택으로 보지 않는다 (틀려도 보증금이 보이는 쪽이 안전하다).
+        # 화면 profile.ts livesInCompanyHousing과 같은 규칙
         dorm = bool(
             moving
             and move
             and row
             and row.company_housing.value is True
+            and housing_aid(row) is None
             and move.housing.value == 0
         )
         regional = []
