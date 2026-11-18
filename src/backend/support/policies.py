@@ -100,8 +100,16 @@ _MOVING_WORDS = re.compile(r'월세|전세|임대|임차|보증금|주거비|이
 _TARGETED_WORDS = re.compile(
     r'자립준비|보호종료|장애|한부모|가족돌봄|대학원|대학기숙사|공공기숙사|연합생활관|'
     r'농업|농촌|귀농|어업|어촌|귀어|군인|장병|제대|전역예정|전역자|북한이탈|다문화|'
-    r'예술지원|예술인|창작자|예술가|자살|금연|창업|중장년'
+    r'예술지원|예술인|창작자|예술가|자살|금연|창업|중장년|군복무|수급자'
 )
+# 요건 코드 (docs/api/온통청년_청년정책.md 코드정의, 쉼표로 여럿): 이 중 하나도 없으면 막 취업한
+# 사람이 아닌 대상 전용이다 (미취업자·재학생·장애인·군인 전용 등). 코드가 비어 있으면 보지 않는다
+_FOR_NEW_WORKER = {
+    'jobCd': {'0013001', '0013009', '0013010'},  # 재직자·기타·제한없음
+    # 고교 졸업·대졸 예정·대학 졸업·석박사·기타·제한없음
+    'schoolCd': {'0049004', '0049006', '0049007', '0049008', '0049009', '0049010'},
+    'sbizCd': {'0014001', '0014010'},  # 중소기업·제한없음
+}
 _FAMILY_WORDS = re.compile(r'신혼|결혼|부부|출산|임신|난임|다자녀|자녀|육아|출생')
 
 Fit = Literal['moving', 'general', 'targeted']
@@ -397,7 +405,11 @@ def _deadline(policy: SupportPolicy) -> date:
 
 
 def _fit(policy: dict[str, Any], single: bool) -> Fit:
-    """나에게 맞는 정도 (모듈 설명의 '나에게 맞는 것 먼저'). 이름·키워드만 본다."""
+    """나에게 맞는 정도 (모듈 설명의 '나에게 맞는 것 먼저'). 이름·키워드와 요건 코드를 본다."""
+    for key, fits in _FOR_NEW_WORKER.items():
+        codes = {c.strip() for c in _text(policy, key).split(',') if c.strip()}
+        if codes and not codes & fits:
+            return 'targeted'
     words = f'{_text(policy, "plcyNm")} {_text(policy, "plcyKywdNm")}'
     # '대학생'은 청년과 함께 적힌 것('청년·대학생')이 아닐 때만 대학생 전용으로 본다
     student_only = '대학생' in words and '청년' not in _text(policy, 'plcyNm')

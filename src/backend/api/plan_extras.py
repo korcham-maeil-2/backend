@@ -3,14 +3,16 @@
   GET /plan/savings              → SavingsList   은행 적금 12개월 기본금리 높은 순
                                                  (금감원, 가입 권유 아님)
   GET /plan/training/{lawd_cd}   → TrainingList  근무지 근처 재직자 오프라인 강의 (고용24)
+                                                 ?ncs=20 이면 그 직무(NCS 대분류) 과정 먼저
 
 키가 없으면 status='off', 조회가 실패하면 status='unavailable'로 이유와 함께 돌려준다
 (화면은 그 칸만 숨긴다).
 """
 
 import asyncio
+from typing import Annotated
 
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, Query, Request, status
 
 from backend.api.errors import AppError, ErrorCode, error_responses
 from backend.normalize.checks import region_by_code
@@ -29,7 +31,11 @@ async def get_savings(request: Request) -> SavingsList:
 
 
 @router.get('/training/{lawd_cd}', responses=error_responses(404))
-async def get_training(lawd_cd: str, request: Request) -> TrainingList:
+async def get_training(
+    lawd_cd: str,
+    request: Request,
+    ncs: Annotated[str | None, Query(pattern=r'^\d{2}$', description='직무 NCS 대분류')] = None,
+) -> TrainingList:
     """근무지(시군구 코드)의 재직자 오프라인 강의. 없으면 시도로 넓힌다 (scope='sido')."""
     if len(lawd_cd) != 5 or region_by_code(lawd_cd) is None:
         raise AppError(
@@ -38,4 +44,4 @@ async def get_training(lawd_cd: str, request: Request) -> TrainingList:
             '강의를 찾을 수 있는 시군구 코드가 아닙니다.',
         )
     source: TrainingSource = request.app.state.training_source
-    return await asyncio.to_thread(source.get, lawd_cd, today_kst())
+    return await asyncio.to_thread(source.get, lawd_cd, today_kst(), ncs)
