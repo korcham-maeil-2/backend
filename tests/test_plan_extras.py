@@ -518,3 +518,15 @@ def test_job_lookup_failure_falls_back_and_follows_the_base_scope():
     found = TrainingSource(wide, kinds=('card',)).get(PANGYO, TODAY, ncs='20')
     assert found.scope == 'sido' and found.courses[0].title == '경기 자바'
     assert ('card', '41', None, True) in wide.calls  # 직무 과정도 시도에서
+
+
+def test_savings_estimates_come_from_the_backend():
+    """적금 12개월 뒤 금액은 백엔드가 계산한다 (금리 1위 상품 기본금리, 단리, 세전)."""
+    from backend.public_data.finlife import DEPOSITS, estimate
+
+    e = estimate(500_000, 3.91)
+    assert (e.principal_krw, e.interest_krw, e.total_krw) == (6_000_000, 127_000, 6_127_000)
+    found = SavingsSource(lambda: SAVINGS).get()
+    assert [x.monthly_krw for x in found.estimates] == list(DEPOSITS)
+    top = found.products[0].rate
+    assert found.estimates[2] == estimate(DEPOSITS[2], top)
