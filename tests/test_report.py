@@ -71,6 +71,11 @@ def amounts_of(**values: tuple[int, str]) -> Amounts:
     return Amounts(dict(values))
 
 
+def shown(value: int) -> str:
+    """리포트에 들어가는 금액 글자 (화면과 같은 반올림: '약 196만원')."""
+    return render('{{A1}}', amounts_of(A1=(value, 'other')))
+
+
 PANGYO = amounts_of(
     A1=(36_000_000, 'salary'), A2=(1_963_100, 'remaining'), A3=(590_000, 'other'),
     A5=(2_001_100, 'remaining'), A9=(30_000_000, 'salary'),
@@ -80,14 +85,16 @@ PANGYO = amounts_of(
 @pytest.mark.parametrize(
     ('draft', 'text'),
     [
-        ('매달 {{A2}}이 남아요', '매달 196만 3,100원이 남아요'),
+        # 화면과 같게: 만 원으로 떨어지지 않으면 반올림해 '약' (AI가 '|약'을 썼든 안 썼든)
+        ('매달 {{A2}}이 남아요', '매달 약 196만원이 남아요'),
         ('{{ A2 | 약 }}', '약 196만원'),
-        ('{{A5-A2}} 더 남아요', '3만 8,000원 더 남아요'),
+        ('{{A5-A2}} 더 남아요', '약 4만원 더 남아요'),
+        ('약 {{A2}} 남아요', '약 196만원 남아요'),  # '약'을 따로 써도 겹치지 않게
         ('{{A2-A5|약}}', '약 4만원'),
         ('연봉 차이 {{A1-A9}}', '연봉 차이 600만원'),
         (
             '{{A3}}를 쓰고 {{A2}}가 남고, {{A5}}는 {{A3}}와',
-            '59만원을 쓰고 196만 3,100원이 남고, 200만 1,100원은 59만원과',
+            '59만원을 쓰고 약 196만원이 남고, 약 200만원은 59만원과',
         ),
         ('{{A3}}가량', '59만원가량'),  # 조사가 아닌 말은 그대로
         ('{{A3}}로 잡았어요', '59만원으로 잡았어요'),
@@ -95,7 +102,7 @@ PANGYO = amounts_of(
         ('{{A3}}로서', '59만원로서'),  # 조사가 아닌 말은 그대로
     ],
 )
-def test_render_fills_exact_amounts(draft, text):
+def test_render_fills_amounts_like_the_screen(draft, text):
     assert check_draft(draft, PANGYO) == []
     assert render(draft, PANGYO) == text
 
@@ -299,7 +306,7 @@ def test_literal_amount_is_rewritten_with_feedback(caplog):
     reviewer = FakeReviewer([])
     with caplog.at_level(logging.WARNING):
         out = ReportAgent(writer, reviewer).run(state)
-    assert out['report'] == '지금 집에서 다니면 매달 196만 3,100원이 남아요.'  # 코드가 채운 금액
+    assert out['report'] == '지금 집에서 다니면 매달 약 196만원이 남아요.'  # 코드가 채운 금액
     assert out['report_check']['status'] == 'verified'
     assert out['report_check']['attempts'] == 2
     # 두 번째 쓰기는 앞 초안과 문제를 받았다
@@ -307,7 +314,7 @@ def test_literal_amount_is_rewritten_with_feedback(caplog):
     assert previous == '매달 999만원이 남아요.'
     assert "'999만'처럼 금액을 숫자로 직접 썼어요" in problems[0]
     assert reviewer.calls == 1  # 금액이 틀린 초안은 검토자에게 보내지 않는다 (비용)
-    assert reviewer.reports == ['지금 집에서 다니면 매달 196만 3,100원이 남아요.']
+    assert reviewer.reports == ['지금 집에서 다니면 매달 약 196만원이 남아요.']
     assert '리포트 검증 실패 (1번째)' in caplog.text  # 이슈 완료 조건: 재작성이 로그로 확인
 
 
@@ -340,7 +347,7 @@ def test_negative_remaining_user_gets_report():
     out = ReportAgent(writer, FakeReviewer([])).run(state)
     assert out['report_check']['status'] == 'verified'
     assert out['report'] == (
-        f'지금 집에서 다니면 매달 {won(-remaining_of(state))}씩 모자라요. 이사 경우는 추정이에요.'
+        f'지금 집에서 다니면 매달 {shown(-remaining_of(state))}씩 모자라요. 이사 경우는 추정이에요.'
     )
 
 
@@ -461,7 +468,7 @@ def test_report_without_estimate_word_is_asked_to_say_so():
     move = ref_of(state, 'move')
     writer = FakeWriter(f'이사하면 매달 {move}이 남아요.', f'이사하면 매달 {move}이 남아요 (추정).')
     out = ReportAgent(writer, FakeReviewer([], [])).run(state)
-    assert out['report'] == f'이사하면 매달 {won(remaining_of(state, "move"))}이 남아요 (추정).'
+    assert out['report'] == f'이사하면 매달 {shown(remaining_of(state, "move"))}이 남아요 (추정).'
     assert writer.calls[1][1] == [NO_ESTIMATE]
 
 

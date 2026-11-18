@@ -221,7 +221,9 @@ def _posting_plan(
     regional: list[SupportPolicy],
     national: list[SupportPolicy],
     today: date,
+    dorm: bool = False,
 ) -> PostingPlan:
+    """공고 하나의 플랜. dorm: 이사하면서 회사 사택·기숙사에 들어간다 (build_plan의 _in_dorm)."""
     last = _add_months(today.replace(day=1), MONTHS)
     loc = row.location.value if row else None
     region = ' '.join(x for x in (loc.sido, loc.sigungu) if x) or None if loc else None
@@ -229,11 +231,22 @@ def _posting_plan(
     notes: list[str] = []
 
     if moving:
-        deposit = _deposit_item(rent)
+        # 사택·기숙사에 들어가면 원룸 보증금도, 집 구하기·월세 지원(이사·주거 정책)도 필요 없다.
+        # 전입신고는 그대로 (사택 주소로 옮긴다). 첫 취업 지원(청약통장 등)은 주거로 분류돼도 넣는다
+        deposit = None if dorm else _deposit_item(rent)
         if deposit:
             slots[('before', None)] = [deposit]
         slots[('move_month', None)] = [MOVE_IN]
-        policies = [p for p in regional + national if p.fit != 'targeted']
+        policies = [
+            p
+            for p in regional + national
+            if p.fit != 'targeted' and not (dorm and p.fit == 'moving' and not is_first_job(p))
+        ]
+        if dorm:
+            notes.append(
+                '사택·기숙사에 들어가는 것으로 보고 '
+                '보증금 마련과 집 구하기·월세 지원은 넣지 않았어요.'
+            )
     else:
         # 통근이면 이사·주거 할 일은 없고, 사는 곳을 몰라 지역 정책도 넣지 않는다 (전국 정책만)
         policies = [p for p in national if p.fit != 'targeted']
@@ -324,6 +337,16 @@ def build_plan(
         code = row.location.value.lawd_cd if row and row.location.value else None
         move = next((s for s in posting.scenarios if s.case == 'move'), None)
         moving = bool(move and move.applicable)
+        # 사택·기숙사에 들어가는지: 공고에 사택·기숙사가 있고, 이사할 집 주거비를 0원으로 넣었다.
+        # 주거비를 넣었으면 따로 집을 구하는 것으로 본다
+        # (화면 profile.ts livesInCompanyHousing과 같은 규칙)
+        dorm = bool(
+            moving
+            and move
+            and row
+            and row.company_housing.value is True
+            and move.housing.value == 0
+        )
         regional = []
         if support:
             regional = next(
@@ -337,7 +360,7 @@ def build_plan(
             support.national if support else [],
             today,
         )
-        plans.append(_posting_plan(*head, moving, *tail))
+        plans.append(_posting_plan(*head, moving, *tail, dorm=dorm))
         # 이사 플랜이면 통근 플랜도 함께 (통근이 해당될 때): 화면이 둘을 바꿔 보여 준다
         commute = next((s for s in posting.scenarios if s.case == 'commute'), None)
         if moving and commute and commute.applicable:

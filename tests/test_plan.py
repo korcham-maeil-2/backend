@@ -105,6 +105,42 @@ def test_moving_plan_puts_each_task_in_its_month():
     assert move_in.when == '이사 후 14일 안' and '주민등록법' in move_in.source
 
 
+def test_company_housing_resident_gets_no_deposit_or_housing_support():
+    # 사택·기숙사가 있는 공고에 이사할 집 주거비를 0원으로 넣었다 → 사택에 들어간다
+    table, _ = naju()
+    table = [{**table[0], 'company_housing': {**table[0]['company_housing'], 'value': True}}]
+    profile = naju_profile(27)
+    profile['postings']['posting-1'] = {
+        **profile['postings']['posting-1'],
+        'move_housing': {'value': 0, 'status': 'user_input'},
+    }
+    result = calculate_all(table, profile, NAJU_RENT)
+    local = [
+        policy('A', '나주 청년 월세 지원', apply_period='2026-01-01 ~ 2026-12-31'),
+        policy('C', '청년 전세자금 대출', apply_status='always', apply_period='상시'),
+    ]
+    plan = build_plan(result, support(local), table, TODAY)
+    slots = slots_of(plan)
+    assert '보증금 마련' not in sum(slots.values(), [])
+    assert '청년 전세자금 대출' not in sum(slots.values(), [])  # 집 구하기·월세 지원도 빠진다
+    assert '나주 청년 월세 지원' not in sum(slots.values(), [])
+    assert slots['이사한 달'] == ['전입신고']  # 사택 주소로 전입신고는 한다
+    assert any('사택·기숙사' in note for note in plan.postings[0].notes)
+
+
+def test_company_housing_but_renting_keeps_the_deposit():
+    # 사택이 있어도 주거비를 넣었으면 따로 집을 구하는 것으로 본다
+    table, _ = naju()
+    table = [{**table[0], 'company_housing': {**table[0]['company_housing'], 'value': True}}]
+    profile = naju_profile(27)
+    profile['postings']['posting-1'] = {
+        **profile['postings']['posting-1'],
+        'move_housing': {'value': 400_000, 'status': 'user_input'},
+    }
+    plan = build_plan(calculate_all(table, profile, NAJU_RENT), support([]), table, TODAY)
+    assert '보증금 마련' in slots_of(plan)['이사 전']
+
+
 def test_targeted_and_undated_general_policies_stay_out():
     """특정 대상 정책, 상시 일반 정책(상담·행사 등)은 플랜에 넣지 않는다 (지원 목록에는 있다)."""
     table, result = naju()

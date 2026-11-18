@@ -4,9 +4,11 @@
 계산 결과(result)·청년 지원(local_support)·비교표(table)에서 리포트에 필요한 것만 골라
 Claude에 넘길 JSON을 만든다. 금액마다 자리표시를 붙인다: '{{A3}} = 196만 3,100원'.
 
-[자리표시] AI는 금액을 숫자로 쓰지 않고 자리표시만 쓴다. 코드가 정확한 금액으로 바꿔 넣는다.
-    {{A3}}         196만 3,100원 (부호 포함: −20만원)
-    {{A3|약}}      약 196만원 (코드가 만 원 단위로 반올림)
+[자리표시] AI는 금액을 숫자로 쓰지 않고 자리표시만 쓴다. 코드가 금액 글자로 바꿔 넣는다.
+금액 글자는 결과 화면과 같다: 만 원으로 떨어지면 그대로('59만원'), 아니면 만 원 단위로 반올림해
+'약'을 붙인다('약 196만원'). AI가 고르게 두면 '약 224만원'과 '164만 4,570원'이 한 글에 섞인다.
+    {{A3}}         약 196만원 (부호 포함: −20만원)
+    {{A3|약}}      {{A3}}와 같다 (예전 초안과 맞추려고 받는다)
     {{A3|절대}}    부호 없이 크기만 (매달 모자라는 금액을 말할 때)
     {{A3-A5}}      두 금액의 차이 (항상 양수). '매달 남는 돈'끼리, 연봉끼리만 된다
 그래서 AI가 금액을 잘못 옮기거나, 반올림을 틀리거나, 부호를 버릴 수 없다.
@@ -402,7 +404,6 @@ class _Ref:
     kind: Kind | None = None
     key: str | None = None  # 금액 하나를 쓴 자리표시의 키 (차이는 None)
     diff: bool = False
-    rough: bool = False
     error: str | None = None
 
 
@@ -416,7 +417,7 @@ def _refs(draft: str, amounts: Amounts) -> list[_Ref]:
             ref.error = f"'{ref.text}'는 알 수 없는 자리표시예요. JSON에 있는 자리표시만 써 주세요"
             continue
         a, b, mods = parsed.groups()
-        ref.rough, absolute = '약' in mods, '절대' in mods
+        absolute = '절대' in mods
         if a not in amounts.values or (b and b not in amounts.values):
             ref.error = f"'{ref.text}'는 JSON에 없는 자리표시예요"
             continue
@@ -432,8 +433,9 @@ def _refs(draft: str, amounts: Amounts) -> list[_Ref]:
     return refs
 
 
-def _format(value: int, rough: bool) -> str:
-    if not rough:
+def _format(value: int) -> str:
+    """금액 글자: 화면과 같게 만 원으로 떨어지지 않으면 반올림해 '약'을 붙인다."""
+    if value % 10_000 == 0:
         return won(value)
     unit = 10_000 if abs(value) >= 10_000 else 1_000 if abs(value) >= 1_000 else 1
     rounded = (abs(value) + unit // 2) // unit * unit
@@ -504,7 +506,11 @@ def render(draft: str, amounts: Amounts) -> str:
     for r in _refs(draft, amounts):
         if r.value is None:
             raise ValueError(f'검사하지 않은 자리표시: {r.text}')
-        out += [draft[pos : r.start], _format(r.value, r.rough)]
+        text = _format(r.value)
+        # AI가 '약 {{A3}}'처럼 '약'을 따로 썼으면 겹치지 않게 ('약 약 196만원')
+        if text.startswith('약 ') and draft[pos : r.start].rstrip().endswith('약'):
+            text = text.removeprefix('약 ')
+        out += [draft[pos : r.start], text]
         pos = r.end
         if m := _PARTICLE.match(draft, pos):
             out.append(_FIXED[m.group(0)])
