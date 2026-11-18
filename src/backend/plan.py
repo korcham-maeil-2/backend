@@ -36,7 +36,7 @@ from backend.calc.remaining import OutputModel
 from backend.calc.summary import CalculationResult
 from backend.normalize.schema import ComparisonRow
 from backend.public_data.training import ncs_for_job
-from backend.support.policies import LocalSupport, SupportPolicy
+from backend.support.policies import FIRST_JOB_MAX, LocalSupport, SupportPolicy, is_first_job
 
 MONTHS = 12
 ANYTIME_MAX = 5
@@ -45,7 +45,7 @@ _DEPOSIT_WORDS = re.compile(r'보증금|전세|전월세|버팀목|보증부')
 _RENT_WORDS = re.compile(r'월세')
 
 ItemKind = Literal['deposit', 'move_in', 'policy']
-SlotKind = Literal['before', 'move_month', 'month', 'anytime']
+SlotKind = Literal['before', 'move_month', 'month', 'start', 'anytime']
 
 
 class PlanItem(OutputModel):
@@ -93,6 +93,8 @@ class SettlePlan(OutputModel):
     """세션 응답의 plan 칸. 계산 결과·청년 지원에서 바로 만든다."""
 
     postings: list[PostingPlan]
+    # 이사 플랜이 있는 공고의 통근 플랜: 화면이 통근·이사를 바꿔 본다 (예전 화면은 안 읽음)
+    alternates: list[PostingPlan] = Field(default_factory=list)
     start_month: str = Field(description='달력의 첫 달 (조회한 날의 달, YYYY-MM)')
     notes: list[str] = Field(default_factory=list)
 
@@ -151,19 +153,27 @@ def _policy_item(policy: SupportPolicy, when: str) -> PlanItem:
     )
 
 
+def _placed_on(policy: SupportPolicy) -> date:
+    """달력에 놓이는 날: 곧 열리면 시작일, 아니면 마감일 (기간 없으면 맨 뒤)."""
+    start, end = _period(policy)
+    return (start if policy.apply_status == 'upcoming' else end) or date.max
+
+
 def _place_policy(
     policy: SupportPolicy, today: date, last: date
 ) -> tuple[SlotKind, str | None, PlanItem] | None:
     """정책을 넣을 칸: (칸 종류, 달 YYYY-MM, 할 일). 12개월 밖이면 None."""
     start, end = _period(policy)
     if policy.apply_status in ('always', 'unknown') or start is None or end is None:
-        if policy.fit != 'moving':
-            return None  # 상시 일반 정책은 넣지 않는다 (모듈 설명)
         when = '상시' if policy.apply_status == 'always' else '기간은 신청 페이지에서 확인'
-        if _DEPOSIT_WORDS.search(policy.name):
+        if policy.fit == 'moving' and _DEPOSIT_WORDS.search(policy.name):
             return 'before', None, _policy_item(policy, when)
-        if _RENT_WORDS.search(policy.name):
+        if policy.fit == 'moving' and _RENT_WORDS.search(policy.name):
             return 'move_month', None, _policy_item(policy, when)
+        if is_first_job(policy):  # 입사하면 챙겨 볼 것 (support/policies.py)
+            return 'start', None, _policy_item(policy, when)
+        if policy.fit != 'moving':
+            return None  # 그 밖의 상시 일반 정책은 넣지 않는다 (모듈 설명)
         return 'anytime', None, _policy_item(policy, when)
     if policy.apply_status == 'upcoming':
         if start >= last:
@@ -172,7 +182,8 @@ def _place_policy(
         return 'month', _month_key(start), _policy_item(policy, when)
     # 신청 중: 마감 달에 넣는다 (그 전에 내야 한다). 마감이 1년 넘게 남았으면 '언제든'으로
     if end >= last:
-        return 'anytime', None, _policy_item(policy, f'{end.year}년 {_md(end)}까지')
+        until = _policy_item(policy, f'{end.year}년 {_md(end)}까지')
+        return ('start' if is_first_job(policy) else 'anytime'), None, until
     return 'month', _month_key(end), _policy_item(policy, f'{_md(end)} 마감')
 
 
@@ -224,12 +235,16 @@ def _posting_plan(
         slots[('move_month', None)] = [MOVE_IN]
         policies = [p for p in regional + national if p.fit != 'targeted']
     else:
-        # 통근이면 이사·주거 정책(월세·전세 등)도 해당이 없다
-        policies = [p for p in national if p.fit == 'general']
-        notes.append('지금 집에서 통근하는 경우라 근무지 지역 정책과 주거 정책은 넣지 않았어요.')
+        # 통근이면 이사·주거 할 일은 없고, 사는 곳을 몰라 지역 정책도 넣지 않는다 (전국 정책만)
+        policies = [p for p in national if p.fit != 'targeted']
+        notes.append(
+            '지금 사는 지역의 지원은 사는 곳을 몰라 넣지 않았어요. '
+            '근무지 지역 지원은 청년 지원 목록에서 볼 수 있어요.'
+        )
 
     seen: set[str] = set()
-    for policy in policies:
+    # 같은 달 칸 안에서도 날짜순 (곧 열리는 것은 시작일, 신청 중은 마감일. 상시는 뒤로)
+    for policy in sorted(policies, key=_placed_on):
         if policy.id in seen:
             continue
         seen.add(policy.id)
@@ -237,18 +252,27 @@ def _posting_plan(
         if placed is None:
             continue
         kind, month, item = placed
-        if not moving and kind in ('before', 'move_month'):
+        # 통근: 이사·주거 할 일(이사 전·이사한 달·언제든, 날짜 있는 주거 정책)은 넣지 않는다.
+        # 첫 취업 지원(청약통장 등)은 주거로 분류돼도 넣는다
+        if not moving and (
+            kind in ('before', 'move_month', 'anytime')
+            or policy.fit == 'moving'
+            and kind == 'month'
+            and not is_first_job(policy)
+        ):
             continue
         slots.setdefault((kind, month), []).append(item)
     anytime = slots.get(('anytime', None), [])
     if len(anytime) > ANYTIME_MAX:
         notes.append(
-            f'언제든 신청할 수 있는 이사·주거 지원이 {len(anytime) - ANYTIME_MAX}개 더 있어요. '
+            f'언제든 신청할 수 있는 지원이 {len(anytime) - ANYTIME_MAX}개 더 있어요. '
             '청년 지원 목록에서 볼 수 있어요.'
         )
         slots[('anytime', None)] = anytime[:ANYTIME_MAX]
+    if len(start := slots.get(('start', None), [])) > FIRST_JOB_MAX:
+        slots[('start', None)] = start[:FIRST_JOB_MAX]
 
-    order = {'before': 0, 'move_month': 1, 'month': 2, 'anytime': 3}
+    order = {'before': 0, 'move_month': 1, 'month': 2, 'start': 3, 'anytime': 4}
     built = []
     for (kind, month), items in sorted(
         slots.items(), key=lambda kv: (order[kv[0][0]], kv[0][1] or '')
@@ -257,7 +281,12 @@ def _posting_plan(
             y, m = month.split('-')
             label = f'{y}년 {int(m)}월'
         else:
-            label = {'before': '이사 전', 'move_month': '이사한 달', 'anytime': '언제든'}[kind]
+            label = {
+                'before': '이사 전',
+                'move_month': '이사한 달',
+                'start': '입사하면 챙겨 볼 것',
+                'anytime': '언제든',
+            }[kind]
         # 이사하는 경우: 이사·주거 정책을 같은 칸 안에서 먼저
         items.sort(key=lambda i: (i.kind != 'deposit', i.kind != 'move_in'))
         built.append(PlanSlot(kind=kind, label=label, month=month, items=items))
@@ -289,7 +318,7 @@ def build_plan(
     if support and support.checked_on:
         today = date.fromisoformat(support.checked_on)
 
-    plans = []
+    plans, alternates = [], []
     for posting in calc.postings:
         row = rows.get(posting.posting_id)
         code = row.location.value.lawd_cd if row and row.location.value else None
@@ -300,19 +329,22 @@ def build_plan(
             regional = next(
                 (r.policies for r in support.regions if posting.posting_id in r.posting_ids), []
             )
-        plans.append(
-            _posting_plan(
-                posting.posting_id,
-                posting.company,
-                row,
-                moving,
-                rents.get(code) if code else None,
-                regional,
-                support.national if support else [],
-                today,
-            )
+
+        head = (posting.posting_id, posting.company, row)
+        tail = (
+            rents.get(code) if code else None,
+            regional,
+            support.national if support else [],
+            today,
         )
+        plans.append(_posting_plan(*head, moving, *tail))
+        # 이사 플랜이면 통근 플랜도 함께 (통근이 해당될 때): 화면이 둘을 바꿔 보여 준다
+        commute = next((s for s in posting.scenarios if s.case == 'commute'), None)
+        if moving and commute and commute.applicable:
+            alternates.append(_posting_plan(*head, False, *tail))
     notes = ['신청 조건과 일정은 바뀔 수 있어요. 신청 전에 안내 페이지에서 확인해 주세요.']
     if support is None:
         notes.append('청년 지원 정보를 불러오지 못해 지원 신청 일정은 빠져 있어요.')
-    return SettlePlan(postings=plans, start_month=_month_key(today), notes=notes)
+    return SettlePlan(
+        postings=plans, alternates=alternates, start_month=_month_key(today), notes=notes
+    )

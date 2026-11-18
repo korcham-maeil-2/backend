@@ -68,6 +68,11 @@ from backend.support.youthcenter import PolicySource, SupportError
 logger = logging.getLogger(__name__)
 
 MAX_POLICIES = 10
+# 첫 취업이면 누구나 해당하는 전국 상시 지원 (정착 플랜의 '입사하면 챙겨 볼 것').
+# 이름에서만 찾고 구직자용은 뺀다. 보여 줄 목록(MAX_POLICIES)에 못 들어도 이만큼은 함께 보낸다
+_FIRST_JOB_WORDS = re.compile(r'국민연금|학자금|청약|자산형성|직장인|재직')
+_NOT_FIRST_JOB_WORDS = re.compile(r'구직|취업준비|면접|일경험|인턴|창업|상담')
+FIRST_JOB_MAX = 5
 LOOKUP_THREADS = 4  # 지역 여러 곳을 동시에 조회 (캐시가 없으면 지역마다 1~3초)
 KST = timezone(timedelta(hours=9))
 
@@ -168,7 +173,10 @@ class LocalSupport(OutputModel):
 
     regions: list[RegionSupport]
     national: list[SupportPolicy] = Field(
-        description='전국 정책 (어느 근무지든 같다). 신청할 수 있는 것만'
+        description=(
+            '전국 정책 (어느 근무지든 같다). 신청할 수 있는 것만. '
+            '앞 MAX_POLICIES개 + 거기 못 든 첫 취업 지원(FIRST_JOB_MAX개까지, 정착 플랜용)'
+        )
     )
     national_matched: int = Field(description='신청할 수 있는 전국 정책 수')
     age: int | None = Field(description='거르는 데 쓴 나이. 없으면 나이로 거르지 않음')
@@ -419,6 +427,15 @@ def _fit(policy: dict[str, Any], single: bool) -> Fit:
     return 'moving' if moving else 'general'
 
 
+def is_first_job(policy: SupportPolicy) -> bool:
+    """첫 취업이면 누구나 해당하는 전국 지원인지 (이름으로만 본다)."""
+    return (
+        policy.scope == 'national'
+        and bool(_FIRST_JOB_WORDS.search(policy.name))
+        and not _NOT_FIRST_JOB_WORDS.search(policy.name)
+    )
+
+
 def _order(policy: SupportPolicy) -> tuple[int, bool, int]:
     """보여 줄 순서: 나에게 맞는 것 → 주거 먼저 → 마감 가까운 순 (상시·기간 모름은 뒤)."""
     return _FIT_RANK[policy.fit], policy.category != HOUSING, _deadline(policy).toordinal()
@@ -551,9 +568,10 @@ def find_local_support(
             )
         )
     nationals = sorted(national.values(), key=_order)
+    first_job = [p for p in nationals[MAX_POLICIES:] if is_first_job(p) and p.fit != 'targeted']
     return LocalSupport(
         regions=regions,
-        national=nationals[:MAX_POLICIES],
+        national=nationals[:MAX_POLICIES] + first_job[:FIRST_JOB_MAX],
         national_matched=len(nationals),
         age=age,
         notes=notes,

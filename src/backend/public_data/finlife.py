@@ -55,10 +55,41 @@ class SavingsProduct(OutputModel):
     join_way: str | None = Field(description="가입 방법 (예: '인터넷,스마트폰')")
 
 
+# 화면의 '매달 넣을 금액' 버튼. 남는 돈보다 많은 금액은 화면이 빼고 보여 준다
+DEPOSITS = (100_000, 300_000, 500_000, 1_000_000)
+
+
+class SavingsEstimate(OutputModel):
+    """매달 같은 금액을 12개월 넣으면 (금리 1위 상품의 기본금리, 세전)."""
+
+    monthly_krw: int
+    principal_krw: int
+    interest_krw: int = Field(description='세전 이자 (단리, 1,000원 단위 반올림)')
+    total_krw: int
+
+
+def estimate(monthly_krw: int, rate: float) -> SavingsEstimate:
+    """12개월 정기적립 단리: 이자 = 금액 × 연이율 × (12+11+…+1)/12 = 금액 × 연이율 × 6.5."""
+    # round()는 .5를 짝수로 보내서(58,500 → 58,000) 직접 반올림한다
+    interest = int(monthly_krw * rate * 6.5 / 100 / 1000 + 0.5) * 1000
+    principal = monthly_krw * 12
+    return SavingsEstimate(
+        monthly_krw=monthly_krw,
+        principal_krw=principal,
+        interest_krw=interest,
+        total_krw=principal + interest,
+    )
+
+
 class SavingsList(OutputModel):
     """GET /plan/savings 응답."""
 
     products: list[SavingsProduct]
+    # 숫자는 백엔드가 만든다: 화면은 고르고 보여 주기만
+    estimates: list[SavingsEstimate] = Field(
+        default_factory=list,
+        description='DEPOSITS 금액마다 12개월 뒤 금액 (products[0] 기본금리 기준). 상품 없으면 []',
+    )
     term_months: int = 12
     disclosed_month: str | None = Field(description='공시 기준월 (YYYYMM)')
     source: str = SOURCE
@@ -178,7 +209,12 @@ class SavingsSource:
             )
             self._failed = (now, failed)
             return failed
-        found = SavingsList(products=products, disclosed_month=data.get('month'), status='ok')
+        found = SavingsList(
+            products=products,
+            estimates=[estimate(d, products[0].rate) for d in DEPOSITS] if products else [],
+            disclosed_month=data.get('month'),
+            status='ok',
+        )
         self._cached = (now, found)
         return found
 

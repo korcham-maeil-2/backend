@@ -162,7 +162,8 @@ def test_commute_only_plan_has_no_move_tasks_and_no_local_policies():
     plan = build_plan(result, support([policy('L', '판교 월세')], national), table, TODAY)
     assert slots_of(plan) == {'2026년 12월': ['청년도약계좌']}
     assert plan.postings[0].moving is False
-    assert any('통근' in n for n in plan.postings[0].notes)
+    assert any('사는 곳을 몰라' in n for n in plan.postings[0].notes)
+    assert plan.alternates == []  # 이사가 해당되지 않으면 바꿔 볼 플랜이 없다
 
 
 def test_without_support_plan_keeps_move_tasks():
@@ -216,3 +217,76 @@ def test_session_response_includes_plan(tmp_path):
         assert posting['moving'] is True
         titles = [i['title'] for s in posting['slots'] for i in s['items']]
         assert '전입신고' in titles and '나주 청년 월세 지원' in titles
+
+
+def test_start_slot_collects_first_job_policies_for_both_cases():
+    """입사하면 챙겨 볼 것: 전국 상시 정책 중 첫 취업이면 누구나 해당하는 것 (구직자용은 뺀다)."""
+    table, result = naju()
+    national = [
+        policy(
+            'S1',
+            '청년 생애 첫 국민연금 보험료 지원',
+            scope='national',
+            fit='general',
+            apply_status='always',
+            apply_period=None,
+        ),
+        policy(
+            'S2', '청년주택드림청약통장', scope='national', apply_status='always', apply_period=None
+        ),
+        policy(
+            'X1',
+            '청년 구직 상담',
+            scope='national',
+            fit='general',
+            apply_status='always',
+            apply_period=None,
+        ),
+        policy('X2', '지역 학자금 지원', apply_status='always', apply_period=None),  # 지역 정책
+    ]
+    plan = build_plan(result, support([], national), table, TODAY)
+    assert slots_of(plan)['입사하면 챙겨 볼 것'] == [
+        '청년 생애 첫 국민연금 보험료 지원',
+        '청년주택드림청약통장',
+    ]
+
+
+def test_same_month_policies_sorted_by_date_and_long_first_job_in_start():
+    """같은 달 칸 안에서도 날짜순. 마감이 1년 넘게 남은 첫 취업 지원은 '입사하면'에."""
+    table, result = naju()
+    local = [policy('L', '나주 청년 월세 지원', apply_period='2026-01-01 ~ 2026-12-28')]
+    national = [
+        policy('N', '청년 이사비 지원', scope='national', apply_period='2026-01-01 ~ 2026-12-03'),
+        policy(
+            'F',
+            '청년주택드림청약통장',
+            scope='national',
+            fit='general',
+            apply_period='2024-02-21 ~ 2099-12-31',
+        ),
+    ]
+    slots = slots_of(build_plan(result, support(local, national), table, TODAY))
+    assert slots['2026년 12월'] == ['청년 이사비 지원', '나주 청년 월세 지원']
+    assert slots['입사하면 챙겨 볼 것'] == ['청년주택드림청약통장']
+
+
+def test_commute_alternate_plan_when_both_cases_apply():
+    """이사가 해당되면 이사 플랜(postings)과 함께 통근 플랜(alternates)도 만든다.
+    통근 플랜에는 보증금·전입신고·지역 정책·날짜 있는 주거 정책이 없다."""
+    table = scenario_table('near_pangyo')
+    profile = profile_a()
+    profile['postings'] = {
+        'posting-1': {**profile['postings']['near_pangyo'], 'move_possible': True}
+    }
+    result = calculate_all(table, profile, {})
+    national = [
+        policy('N1', '전국 청년 월세 지원', scope='national'),
+        policy('N2', '청년도약계좌', scope='national', fit='general', category='금융･복지･문화'),
+    ]
+    plan = build_plan(result, support([policy('L', '판교 월세')], national), table, TODAY)
+    [moving] = plan.postings
+    [commute] = plan.alternates
+    assert moving.moving is True and commute.moving is False
+    assert commute.posting_id == moving.posting_id
+    titles = [i.title for s in commute.slots for i in s.items]
+    assert titles == ['청년도약계좌']
