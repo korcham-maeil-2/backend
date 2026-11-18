@@ -53,7 +53,8 @@ jobs:
         run: |
           set -euo pipefail
           cd "$DEPLOY_DIR"
-          docker compose up -d --build --remove-orphans
+          # 오류 추적(GlitchTip)에서 어느 배포의 오류인지 보이게 커밋 번호를 넘긴다
+          SENTRY_RELEASE="backend@$(git rev-parse --short HEAD)" docker compose up -d --build --remove-orphans
 
       - name: 동작 확인 (/health)
         run: |

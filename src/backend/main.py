@@ -26,6 +26,7 @@ from backend.api.sessions import router as sessions_router
 from backend.graph import build_graph
 from backend.inputs.read import FileReader, daily_budget_from_env
 from backend.inputs.transcribe import ClaudeTranscriber, FixtureTranscriber, Transcriber
+from backend.monitoring import init_monitoring
 from backend.normalize import Extractor, make_extractor, parse_mode
 from backend.public_data.finlife import SavingsSource, savings_from_env
 from backend.public_data.rent import HttpRentFetcher, RentCache, RentEstimator, RentFetcher
@@ -173,6 +174,9 @@ def create_app(
     app.include_router(plan_router)
     return app
 
+
+# 오류 추적 (GlitchTip): SENTRY_DSN이 있을 때만. 앱을 만들기 전에 켜야 FastAPI에 붙는다
+init_monitoring()
 
 # uvicorn·fastapi 명령이 찾아서 실행하는 앱 객체.
 app = create_app()
