@@ -202,13 +202,22 @@ def _deposit_item(rent: dict | None) -> PlanItem | None:
     )
 
 
+# '14일'은 설명 문장에 한 번만 (단계 이름·칩에 되풀이하지 않는다). 의무·과태료를 단정하지 않고
+# 규칙과 출처, 하면 좋은 이유(근무지 청년 지원은 주민등록 주소를 본다)를 쓴다
 MOVE_IN = PlanItem(
     kind='move_in',
     title='전입신고',
-    detail='이사한 날부터 14일 안에 주민센터나 정부24에서 해요. 지역 지원은 전입한 주소를 봐요.',
-    when='이사 후 14일 안',
+    detail='이사한 날부터 14일 안에 주민센터나 정부24에서 해요. '
+    '근무지 청년 지원은 주민등록 주소를 봐요.',
     source='주민등록법 제16조',
     url='https://www.gov.kr',
+)
+# 사택·기숙사로 들어가도 주소를 옮기는 일은 같다. 기숙사 전입 방법은 회사마다 다르다
+MOVE_IN_DORM = MOVE_IN.model_copy(
+    update={
+        'detail': '사는 곳을 사택·기숙사로 옮기면 14일 안에 전입신고를 해요. '
+        '기숙사는 방법이 회사마다 달라 회사에 먼저 물어보세요.'
+    }
 )
 
 
@@ -236,7 +245,7 @@ def _posting_plan(
         deposit = None if dorm else _deposit_item(rent)
         if deposit:
             slots[('before', None)] = [deposit]
-        slots[('move_month', None)] = [MOVE_IN]
+        slots[('move_month', None)] = [MOVE_IN_DORM if dorm else MOVE_IN]
         policies = [
             p
             for p in regional + national

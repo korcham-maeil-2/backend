@@ -102,7 +102,7 @@ def test_moving_plan_puts_each_task_in_its_month():
     [dec] = [s for s in posting.slots if s.month == '2026-12']
     assert dec.items[0].when == '12월 31일 마감'
     move_in = posting.slots[1].items[0]
-    assert move_in.when == '이사 후 14일 안' and '주민등록법' in move_in.source
+    assert move_in.when is None and '14일 안' in move_in.detail and '주민등록법' in move_in.source
 
 
 def test_company_housing_resident_gets_no_deposit_or_housing_support():
@@ -125,6 +125,8 @@ def test_company_housing_resident_gets_no_deposit_or_housing_support():
     assert '청년 전세자금 대출' not in sum(slots.values(), [])  # 집 구하기·월세 지원도 빠진다
     assert '나주 청년 월세 지원' not in sum(slots.values(), [])
     assert slots['이사한 달'] == ['전입신고']  # 사택 주소로 전입신고는 한다
+    [move_in] = [s for s in plan.postings[0].slots if s.kind == 'move_month'][0].items
+    assert '회사에 먼저 물어보세요' in move_in.detail
     assert any('사택·기숙사' in note for note in plan.postings[0].notes)
 
 
