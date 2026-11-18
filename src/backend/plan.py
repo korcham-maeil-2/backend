@@ -32,7 +32,7 @@ from typing import Literal
 
 from pydantic import Field
 
-from backend.calc.remaining import OutputModel
+from backend.calc.remaining import OutputModel, housing_aid
 from backend.calc.summary import CalculationResult
 from backend.normalize.schema import ComparisonRow
 from backend.public_data.training import ncs_for_job
@@ -202,13 +202,22 @@ def _deposit_item(rent: dict | None) -> PlanItem | None:
     )
 
 
+# '14일'은 설명 문장에 한 번만 (단계 이름·칩에 되풀이하지 않는다). 의무·과태료를 단정하지 않고
+# 규칙과 출처, 하면 좋은 이유(근무지 청년 지원은 주민등록 주소를 본다)를 쓴다
 MOVE_IN = PlanItem(
     kind='move_in',
     title='전입신고',
-    detail='이사한 날부터 14일 안에 주민센터나 정부24에서 해요. 지역 지원은 전입한 주소를 봐요.',
-    when='이사 후 14일 안',
+    detail='이사한 날부터 14일 안에 주민센터나 정부24에서 해요. '
+    '근무지 청년 지원은 주민등록 주소를 봐요.',
     source='주민등록법 제16조',
     url='https://www.gov.kr',
+)
+# 사택·기숙사로 들어가도 주소를 옮기는 일은 같다. 기숙사 전입 방법은 회사마다 다르다
+MOVE_IN_DORM = MOVE_IN.model_copy(
+    update={
+        'detail': '사는 곳을 사택·기숙사로 옮기면 14일 안에 전입신고를 해요. '
+        '기숙사는 방법이 회사마다 달라 회사에 먼저 물어보세요.'
+    }
 )
 
 
@@ -221,7 +230,9 @@ def _posting_plan(
     regional: list[SupportPolicy],
     national: list[SupportPolicy],
     today: date,
+    dorm: bool = False,
 ) -> PostingPlan:
+    """공고 하나의 플랜. dorm: 이사하면서 회사 사택·기숙사에 들어간다 (build_plan에서 정한다)."""
     last = _add_months(today.replace(day=1), MONTHS)
     loc = row.location.value if row else None
     region = ' '.join(x for x in (loc.sido, loc.sigungu) if x) or None if loc else None
@@ -229,11 +240,17 @@ def _posting_plan(
     notes: list[str] = []
 
     if moving:
-        deposit = _deposit_item(rent)
+        # 사택·기숙사에 들어가면 원룸 보증금도, 집 구하기·월세 지원(이사·주거 정책)도 필요 없다.
+        # 전입신고는 그대로 (사택 주소로 옮긴다). 첫 취업 지원(청약통장 등)은 주거로 분류돼도 넣는다
+        deposit = None if dorm else _deposit_item(rent)
         if deposit:
             slots[('before', None)] = [deposit]
-        slots[('move_month', None)] = [MOVE_IN]
-        policies = [p for p in regional + national if p.fit != 'targeted']
+        slots[('move_month', None)] = [MOVE_IN_DORM if dorm else MOVE_IN]
+        policies = [
+            p
+            for p in regional + national
+            if p.fit != 'targeted' and not (dorm and p.fit == 'moving' and not is_first_job(p))
+        ]
     else:
         # 통근이면 이사·주거 할 일은 없고, 사는 곳을 몰라 지역 정책도 넣지 않는다 (전국 정책만)
         policies = [p for p in national if p.fit != 'targeted']
@@ -324,6 +341,19 @@ def build_plan(
         code = row.location.value.lawd_cd if row and row.location.value else None
         move = next((s for s in posting.scenarios if s.case == 'move'), None)
         moving = bool(move and move.applicable)
+        # 사택·기숙사에 들어가는지: 공고에 사택·기숙사가 있고, 이사할 집 주거비를 0원으로 넣었다.
+        # 주거비를 넣었으면 따로 집을 구하는 것으로 본다. 주거지원비가 있으면 이사 주거비가
+        # '넣은 금액 − 지원비'(0원 아래로 안 내려감)라 0원이어도 넣은 금액을 알 수 없다
+        # → 사택으로 보지 않는다 (틀려도 보증금이 보이는 쪽이 안전하다).
+        # 화면 profile.ts livesInCompanyHousing과 같은 규칙
+        dorm = bool(
+            moving
+            and move
+            and row
+            and row.company_housing.value is True
+            and housing_aid(row) is None
+            and move.housing.value == 0
+        )
         regional = []
         if support:
             regional = next(
@@ -337,7 +367,7 @@ def build_plan(
             support.national if support else [],
             today,
         )
-        plans.append(_posting_plan(*head, moving, *tail))
+        plans.append(_posting_plan(*head, moving, *tail, dorm=dorm))
         # 이사 플랜이면 통근 플랜도 함께 (통근이 해당될 때): 화면이 둘을 바꿔 보여 준다
         commute = next((s for s in posting.scenarios if s.case == 'commute'), None)
         if moving and commute and commute.applicable:
