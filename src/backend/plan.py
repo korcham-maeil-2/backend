@@ -77,6 +77,9 @@ class PostingPlan(OutputModel):
     posting_id: str
     company: str | None
     region: str | None = Field(description='근무지 시도 시군구')
+    lawd_cd: str | None = Field(
+        default=None, description='근무지 시군구 코드 (화면이 재직자 강의를 찾을 때 쓴다)'
+    )
     moving: bool = Field(description='이사하는 경우를 넣었는지 (이사 경우가 해당될 때)')
     slots: list[PlanSlot]
     notes: list[str] = Field(default_factory=list)
@@ -258,6 +261,7 @@ def _posting_plan(
         posting_id=posting_id,
         company=company,
         region=region,
+        lawd_cd=loc.lawd_cd if loc else None,
         moving=moving,
         slots=built,
         notes=notes,
