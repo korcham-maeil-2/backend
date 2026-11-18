@@ -440,6 +440,8 @@ def test_the_edition_you_can_apply_to_now_is_kept(older, newer):
         ('청년·대학생 햇살론', '금융･복지･문화', 1, 'general'),
         ('중소기업 청년 기숙사 임차비', '금융･복지･문화', 1, 'moving'),
         ('전역예정 장병 지원', '금융･복지･문화', 1, 'targeted'),
+        ('군복무 청년 상해보험 지원', '금융･복지･문화', 1, 'targeted'),
+        ('근로능력 있는 수급자의 탈수급 지원', '금융･복지･문화', 1, 'targeted'),
     ],
 )
 def test_fit_puts_what_a_new_mover_can_use_first(name, category, family, expected):
@@ -762,3 +764,27 @@ def test_client_keeps_only_what_it_is_told_to(tmp_path):
     with sqlite3.connect(tmp_path / 'cache.sqlite') as db:
         [(stored,)] = db.execute('SELECT body FROM youth_policy_cache').fetchall()
     assert '"J"' not in stored
+
+
+@pytest.mark.parametrize(
+    ('codes', 'expected'),
+    [
+        ({'jobCd': '0013003'}, 'targeted'),  # 미취업자 전용
+        ({'jobCd': '0013001,0013003'}, 'general'),  # 재직자도 된다
+        ({'schoolCd': '0049005'}, 'targeted'),  # 대학 재학 전용
+        ({'schoolCd': '0049005,0049006'}, 'general'),  # 대졸 예정도 된다
+        ({'sbizCd': '0014005'}, 'targeted'),  # 장애인 전용
+        ({'sbizCd': '0014001,0014009'}, 'general'),  # 중소기업 재직자도 된다
+        ({'jobCd': '0013010', 'schoolCd': '0049010', 'sbizCd': '0014010'}, 'general'),
+        ({'jobCd': ''}, 'general'),  # 코드가 없으면 이름만 본다
+    ],
+)
+def test_requirement_codes_for_someone_else_go_below(codes, expected):
+    """요건 코드가 막 취업한 사람이 아닌 대상 전용이면 '특정 대상'으로 아래에 둔다."""
+    [p] = select_policies(
+        [pol(plcyNm='청년 마음건강', lclsfNm='금융･복지･문화', **codes)],
+        region_by_code(NAJU),
+        27,
+        TODAY,
+    )
+    assert p.fit == expected

@@ -2,6 +2,7 @@
 
 from datetime import date
 
+import pytest
 from conftest import FakeExtractor
 from fastapi.testclient import TestClient
 
@@ -123,11 +124,13 @@ class FakeWork24:
     def __init__(self, by_key: dict, fail: bool = False) -> None:
         self.by_key, self.fail, self.calls = by_key, fail, []
 
-    def __call__(self, kind, sido, sigungu, today, weekend):
+    def __call__(self, kind, sido, sigungu, today, weekend, ncs=None):
         self.calls.append((kind, sido, sigungu, weekend))
         if self.fail:
             raise TrainingError('신청하신 OpenApi 서비스가 존재하지 않습니다')
         found = self.by_key.get((kind, sigungu or sido), [])
+        if ncs:  # srchNcs1: 그 직무 과정만
+            found = [c for c in found if c.get('ncsCd', '').startswith(ncs)]
         return [c for c in found if c['wkendSe'] == '1'] if weekend else found
 
 
@@ -212,11 +215,11 @@ def test_api_routes(tmp_path):
 class PartlyBroken(FakeWork24):
     """컨소시엄만 실패 (키 오류 등)."""
 
-    def __call__(self, kind, sido, sigungu, today, weekend):
+    def __call__(self, kind, sido, sigungu, today, weekend, ncs=None):
         if kind == 'consortium':
             self.calls.append((kind, sido, sigungu, weekend))
             raise TrainingError('신청하신 OpenApi 서비스가 존재하지 않습니다')
-        return super().__call__(kind, sido, sigungu, today, weekend)
+        return super().__call__(kind, sido, sigungu, today, weekend, ncs)
 
 
 def test_one_kind_failing_keeps_the_other():
@@ -304,3 +307,214 @@ def test_odd_savings_answer_is_unavailable_not_500():
     assert source.get().status == 'unavailable'
     source.get()
     assert len(calls) == 1  # 쿨다운 동안 다시 묻지 않는다
+
+
+# ── 후속 수정 ──
+
+
+def test_widens_only_when_every_kind_is_empty_in_sigungu():
+    """한 종류라도 시군구에 과정이 있으면 넓히지 않는다: 시군구·시도 과정이 섞이면
+    화면의 범위 안내('시군구에는 과정이 없어 시도 과정')가 틀린다."""
+    fake = FakeWork24(
+        {
+            ('card', PANGYO): [raw_course('판교 카드 과정', '2026-12-01')],
+            ('consortium', '41'): [raw_course('경기 컨소시엄', '2026-12-01', area='41131')],
+        }
+    )
+    found = TrainingSource(fake).get(PANGYO, TODAY)
+    assert found.scope == 'sigungu'
+    assert [c.title for c in found.courses] == ['판교 카드 과정']
+    assert all(sigungu == PANGYO for _, _, sigungu, _ in fake.calls)  # 시도로 묻지 않았다
+
+
+def test_widening_skips_the_kind_that_failed():
+    """시군구에서 실패한 종류는 시도에서 다시 묻지 않는다
+    (같은 키 오류를 한 번 더 기다리지 않게)."""
+    fake = PartlyBroken(
+        {('card', '41'): [raw_course('경기 카드 과정', '2026-12-01', area='41131')]}
+    )
+    found = TrainingSource(fake).get(PANGYO, TODAY)
+    assert found.status == 'ok' and found.scope == 'sido'
+    assert [c.title for c in found.courses] == ['경기 카드 과정']
+    assert [call for call in fake.calls if call[0] == 'consortium' and call[2] is None] == []
+
+
+def test_partial_failure_is_kept_only_for_the_cooldown():
+    """한 종류만 실패한 결과도 잠깐(쿨다운) 둔다: 열 때마다 실패한 쪽을 다시 기다리지 않게."""
+    from backend.public_data.training import FAILURE_COOLDOWN_SECONDS
+
+    now = [0.0]
+    fake = PartlyBroken({('card', PANGYO): [raw_course('카드 과정', '2026-12-01')]})
+    source = TrainingSource(fake, clock=lambda: now[0])
+    source.get(PANGYO, TODAY)
+    calls = len(fake.calls)
+    assert [c.title for c in source.get(PANGYO, TODAY).courses] == ['카드 과정']
+    assert len(fake.calls) == calls
+    now[0] = FAILURE_COOLDOWN_SECONDS + 1
+    source.get(PANGYO, TODAY)
+    assert len(fake.calls) > calls
+
+
+def test_old_days_are_dropped_from_the_cache():
+    fake = FakeWork24({('card', PANGYO): [raw_course('과정', '2026-12-01')]})
+    source = TrainingSource(fake, kinds=('card',))
+    source.get(PANGYO, TODAY)
+    source.get(PANGYO, date(2026, 11, 18))
+    assert [key[1] for key in source._cache] == [date(2026, 11, 18)]
+
+
+# ── 직무에 맞는 강의 · 무료 과정 자리 ──
+
+
+@pytest.mark.parametrize(
+    ('job', 'ncs'),
+    [
+        ('백엔드 개발자', '20'),
+        ('전력설비 엔지니어', '19'),
+        ('기술영업', '10'),
+        ('공정관리', None),  # 모르면 직무로 고르지 않는다
+        ('웹디자이너', '08'),  # 디자인 먼저
+        ('콘텐츠 마케터', '02'),
+        ('전자상거래 MD', '10'),  # '전자'가 들어 있어도 전기·전자가 아니다
+        ('간호사', '06'),
+        # 틀리게 고르느니 모름: 겹치는 낱말
+        ('연구개발(R&D)', None),
+        ('인사이트 분석가', None),
+        ('데이터 입력 사무', '02'),
+        ('홀서버', None),
+        ('보안요원', None),
+        # 하는 일이 업종보다 먼저 (Fable 리뷰)
+        ('자동차 영업', '10'),
+        ('반도체 장비 영업', '10'),
+        ('건설 회계', '02'),
+        ('전자 회사 인사 담당', '02'),
+        # 영문 약어는 단어로만
+        ('RETAIL 매니저', None),
+        ('MAINTENANCE 엔지니어', None),
+        ('AI 엔지니어', '20'),
+        ('영상의학과 간호사', '06'),
+        ('앱 마케터', '02'),
+        (None, None),
+    ],
+)
+def test_ncs_for_job(job, ncs):
+    from backend.public_data.training import ncs_for_job
+
+    assert ncs_for_job(job) == ncs
+
+
+def test_job_matching_courses_first_and_free_courses_kept():
+    """직무(NCS)에 맞는 과정이 주말반보다 먼저, 무료 컨소시엄(평일)도 주말반에 밀리지 않는다."""
+    fake = FakeWork24(
+        {
+            ('card', PANGYO): [
+                raw_course(
+                    f'주말 {i}', '2026-12-01', weekend='1', subTitle=f'학원 {i}', ncsCd='12010101'
+                )
+                for i in range(6)
+            ]
+            + [raw_course('파이썬 평일', '2026-12-05', subTitle='코딩학원', ncsCd='20010202')],
+            ('consortium', PANGYO): [
+                raw_course('AI 실무', '2026-12-03', subTitle='SK', ncsCd='20010702'),
+                raw_course('리더십', '2026-12-04', subTitle='상의', ncsCd='02020101'),
+            ],
+        }
+    )
+    source = TrainingSource(fake)
+    titles = [c.title for c in source.get(PANGYO, TODAY, ncs='20').courses]
+    assert titles[:2] == ['AI 실무', '파이썬 평일']  # 직무에 맞는 것 먼저 (시작일 순)
+    assert '리더십' in titles and len(titles) == 5  # 무료 과정 자리
+    calls = len(fake.calls)
+    no_job = [c.title for c in source.get(PANGYO, TODAY).courses]
+    assert len(fake.calls) == calls  # 직무만 달라지면 다시 묻지 않는다
+    assert no_job[0] == '주말 0' and {'AI 실무', '리더십'} <= set(no_job)
+
+
+def test_api_training_ncs_param(tmp_path):
+    app = create_app(
+        str(tmp_path / 'cp.sqlite'),
+        extractor=FakeExtractor(),
+        savings_source=SavingsSource(lambda: SAVINGS),
+        training_source=TrainingSource(
+            FakeWork24({('card', PANGYO): [raw_course('과정', '2027-01-05', ncsCd='20010202')]})
+        ),
+    )
+    with TestClient(app) as c:
+        found = c.get(f'/plan/training/{PANGYO}?ncs=20').json()
+        assert found['courses'][0]['ncs'] == '20010202'
+        assert c.get(f'/plan/training/{PANGYO}?ncs=abc').status_code == 422
+
+
+def test_later_cohort_of_the_same_course_is_dropped():
+    from backend.public_data.training import _course
+
+    first = _course(raw_course('자바 주말반', '2026-12-05'), 'card')
+    later = _course(raw_course('자바 주말반', '2026-12-12'), 'card')
+    assert [c.start for c in pick_courses([later, first], TODAY)] == ['2026-12-05']
+
+
+def test_free_slots_do_not_push_out_job_matching_courses():
+    """직무에 맞는 과정이 충분하면 직무와 무관한 무료 과정에 자리를 내주지 않는다."""
+    fake = FakeWork24(
+        {
+            ('card', PANGYO): [
+                raw_course(f'개발 {i}', '2026-12-01', subTitle=f'학원 {i}', ncsCd='20010202')
+                for i in range(6)
+            ],
+            ('consortium', PANGYO): [raw_course('리더십', '2026-12-01', subTitle='상의')],
+        }
+    )
+    titles = [c.title for c in TrainingSource(fake).get(PANGYO, TODAY, ncs='20').courses]
+    assert '리더십' not in titles and len(titles) == 5
+
+
+class FirstThree(FakeWork24):
+    """고용24처럼 시작일 순 앞부분만 준다 (직무 조건이 없을 때)."""
+
+    def __call__(self, kind, sido, sigungu, today, weekend, ncs=None):
+        found = super().__call__(kind, sido, sigungu, today, weekend, ncs)
+        return found if ncs else found[:3]
+
+
+def test_job_courses_are_asked_with_the_job_filter():
+    """시작일 순 앞부분에 없는 직무 과정도 직무 조건(srchNcs1)으로 따로 물어 찾는다.
+    시군구에 과정이 있으면 직무 과정도 시군구에서만 (시도로 넓히지 않는다)."""
+    fake = FirstThree(
+        {
+            ('card', PANGYO): [
+                raw_course(f'요리 {i}', f'2026-12-0{i + 1}', subTitle=f'학원 {i}', ncsCd='13010101')
+                for i in range(3)
+            ]
+            + [raw_course('자바', '2027-01-20', subTitle='코딩학원', ncsCd='20010202')],
+            ('card', '41'): [
+                raw_course('경기 파이썬', '2026-12-01', area='41131', ncsCd='20010202')
+            ],
+        }
+    )
+    source = TrainingSource(fake, kinds=('card',))
+    found = source.get(PANGYO, TODAY, ncs='20')
+    assert found.scope == 'sigungu' and found.courses[0].title == '자바'
+    assert '경기 파이썬' not in [c.title for c in found.courses]
+    assert '자바' not in [c.title for c in source.get(PANGYO, TODAY).courses]  # 직무 없으면 그대로
+
+
+def test_job_lookup_failure_falls_back_and_follows_the_base_scope():
+    """직무 조회가 실패하면 기본 목록 그대로.
+    기본 목록이 시도로 넓혔으면 직무 과정도 시도에서 묻는다."""
+
+    class JobFails(FakeWork24):
+        def __call__(self, kind, sido, sigungu, today, weekend, ncs=None):
+            if ncs:
+                raise TrainingError('직무 조회 실패')
+            return super().__call__(kind, sido, sigungu, today, weekend, ncs)
+
+    base = {('card', PANGYO): [raw_course('과정', '2026-12-01')]}
+    found = TrainingSource(JobFails(base), kinds=('card',)).get(PANGYO, TODAY, ncs='20')
+    assert found.status == 'ok' and [c.title for c in found.courses] == ['과정']
+
+    wide = FakeWork24(
+        {('card', '41'): [raw_course('경기 자바', '2026-12-01', area='41131', ncsCd='20')]}
+    )
+    found = TrainingSource(wide, kinds=('card',)).get(PANGYO, TODAY, ncs='20')
+    assert found.scope == 'sido' and found.courses[0].title == '경기 자바'
+    assert ('card', '41', None, True) in wide.calls  # 직무 과정도 시도에서

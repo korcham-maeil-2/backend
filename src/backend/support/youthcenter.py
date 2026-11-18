@@ -34,7 +34,7 @@ MAX_PAGES = 10  # 무한 반복 방지 (지역 하나는 1,000건 안팎)
 TIMEOUT = httpx.Timeout(8.0, connect=3.0)
 FAILURE_COOLDOWN_SECONDS = 120  # 조회에 실패한 지역은 이 동안 다시 묻지 않는다 (매번 기다리지 않게)
 # 캐시에 담는 모양(KEEP_FIELDS 등)이 바뀌면 올린다 → 예전 모양으로 저장된 줄은 쓰지 않고 새로 받는다
-CACHE_VERSION = 2
+CACHE_VERSION = 3
 
 # 고르기·화면에 쓰는 필드만 남긴다 (담당자 실명 등 나머지는 저장하지 않는다)
 KEEP_FIELDS = (
@@ -57,6 +57,9 @@ KEEP_FIELDS = (
     'rgtrUpInstCdNm',  # 등록 기관의 상위 기관 (지역 거르기: 시군구 이름)
     'rgtrHghrkInstCdNm',  # 등록 기관의 최상위 기관 (지역 거르기: 시도·중앙부처)
     'pvsnInstGroupCd',  # 기관 구분 0054001 중앙부처 / 0054002 지자체 (지역 거르기)
+    'jobCd',  # 취업·학력·특화 요건 코드 (policies.py _fit: 다른 대상 전용이면 아래로)
+    'schoolCd',
+    'sbizCd',
 )
 
 

@@ -35,6 +35,7 @@ from pydantic import Field
 from backend.calc.remaining import OutputModel
 from backend.calc.summary import CalculationResult
 from backend.normalize.schema import ComparisonRow
+from backend.public_data.training import ncs_for_job
 from backend.support.policies import LocalSupport, SupportPolicy
 
 MONTHS = 12
@@ -79,6 +80,9 @@ class PostingPlan(OutputModel):
     region: str | None = Field(description='근무지 시도 시군구')
     lawd_cd: str | None = Field(
         default=None, description='근무지 시군구 코드 (화면이 재직자 강의를 찾을 때 쓴다)'
+    )
+    ncs: str | None = Field(
+        default=None, description='직무 분류 (NCS 대분류 2자리, 재직자 강의를 직무에 맞게 고를 때)'
     )
     moving: bool = Field(description='이사하는 경우를 넣었는지 (이사 경우가 해당될 때)')
     slots: list[PlanSlot]
@@ -262,6 +266,7 @@ def _posting_plan(
         company=company,
         region=region,
         lawd_cd=loc.lawd_cd if loc else None,
+        ncs=ncs_for_job(row.job_title.value) if row else None,
         moving=moving,
         slots=built,
         notes=notes,
