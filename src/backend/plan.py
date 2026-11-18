@@ -153,6 +153,12 @@ def _policy_item(policy: SupportPolicy, when: str) -> PlanItem:
     )
 
 
+def _placed_on(policy: SupportPolicy) -> date:
+    """달력에 놓이는 날: 곧 열리면 시작일, 아니면 마감일 (기간 없으면 맨 뒤)."""
+    start, end = _period(policy)
+    return (start if policy.apply_status == 'upcoming' else end) or date.max
+
+
 def _place_policy(
     policy: SupportPolicy, today: date, last: date
 ) -> tuple[SlotKind, str | None, PlanItem] | None:
@@ -176,7 +182,8 @@ def _place_policy(
         return 'month', _month_key(start), _policy_item(policy, when)
     # 신청 중: 마감 달에 넣는다 (그 전에 내야 한다). 마감이 1년 넘게 남았으면 '언제든'으로
     if end >= last:
-        return 'anytime', None, _policy_item(policy, f'{end.year}년 {_md(end)}까지')
+        until = _policy_item(policy, f'{end.year}년 {_md(end)}까지')
+        return ('start' if is_first_job(policy) else 'anytime'), None, until
     return 'month', _month_key(end), _policy_item(policy, f'{_md(end)} 마감')
 
 
@@ -236,7 +243,8 @@ def _posting_plan(
         )
 
     seen: set[str] = set()
-    for policy in policies:
+    # 같은 달 칸 안에서도 날짜순 (곧 열리는 것은 시작일, 신청 중은 마감일. 상시는 뒤로)
+    for policy in sorted(policies, key=_placed_on):
         if policy.id in seen:
             continue
         seen.add(policy.id)
@@ -257,7 +265,7 @@ def _posting_plan(
     anytime = slots.get(('anytime', None), [])
     if len(anytime) > ANYTIME_MAX:
         notes.append(
-            f'언제든 신청할 수 있는 이사·주거 지원이 {len(anytime) - ANYTIME_MAX}개 더 있어요. '
+            f'언제든 신청할 수 있는 지원이 {len(anytime) - ANYTIME_MAX}개 더 있어요. '
             '청년 지원 목록에서 볼 수 있어요.'
         )
         slots[('anytime', None)] = anytime[:ANYTIME_MAX]

@@ -251,6 +251,25 @@ def test_start_slot_collects_first_job_policies_for_both_cases():
     ]
 
 
+def test_same_month_policies_sorted_by_date_and_long_first_job_in_start():
+    """같은 달 칸 안에서도 날짜순. 마감이 1년 넘게 남은 첫 취업 지원은 '입사하면'에."""
+    table, result = naju()
+    local = [policy('L', '나주 청년 월세 지원', apply_period='2026-01-01 ~ 2026-12-28')]
+    national = [
+        policy('N', '청년 이사비 지원', scope='national', apply_period='2026-01-01 ~ 2026-12-03'),
+        policy(
+            'F',
+            '청년주택드림청약통장',
+            scope='national',
+            fit='general',
+            apply_period='2024-02-21 ~ 2099-12-31',
+        ),
+    ]
+    slots = slots_of(build_plan(result, support(local, national), table, TODAY))
+    assert slots['2026년 12월'] == ['청년 이사비 지원', '나주 청년 월세 지원']
+    assert slots['입사하면 챙겨 볼 것'] == ['청년주택드림청약통장']
+
+
 def test_commute_alternate_plan_when_both_cases_apply():
     """이사가 해당되면 이사 플랜(postings)과 함께 통근 플랜(alternates)도 만든다.
     통근 플랜에는 보증금·전입신고·지역 정책·날짜 있는 주거 정책이 없다."""
