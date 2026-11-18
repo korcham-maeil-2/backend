@@ -37,6 +37,17 @@ FIXTURES_DIR = Path(__file__).resolve().parents[3] / 'tests' / 'fixtures' / 'nor
 # 인용이 너무 적은 답은 아무 글에나 맞아 버린다 → 불러올 때 막는다.
 MIN_QUOTES = 3
 
+# 화면 '예시로 사용법 보기'에 넣는 시연 공고. 화면은 GET /examples로 받는다 (글이 여기 하나뿐이라
+# 화면 글과 미리 써 둔 답이 어긋나 다시 비용이 드는 일이 없다)
+EXAMPLE_IDS = ('near_pangyo', 'down_naju')
+
+
+def example_postings(fixtures_dir: Path = FIXTURES_DIR) -> list[str]:
+    return [
+        (fixtures_dir / f'{pid}.input.txt').read_text(encoding='utf-8').strip()
+        for pid in EXAMPLE_IDS
+    ]
+
 
 def _quotes(posting: ExtractedPosting) -> set[str]:
     """답 하나에 들어 있는 인용 전부 (비교용으로 squash)."""

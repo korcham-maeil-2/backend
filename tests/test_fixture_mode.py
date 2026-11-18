@@ -41,9 +41,9 @@ def test_mode_switch():
     assert isinstance(make_extractor('claude'), ExampleFirstExtractor)
 
 
-def test_examples_skip_claude_in_claude_mode():
-    """배포(실제 Claude 모드)에서도 '예시 공고 넣기' 글만 넣으면 Claude를 부르지 않는다 (비용 0원).
-    한 글자라도 고쳤거나 다른 공고가 섞이면 Claude를 부른다."""
+def test_examples_skip_claude_in_claude_mode(tmp_path):
+    """배포(실제 Claude 모드)에서도 화면이 GET /examples로 받은 예시 글만 넣으면 Claude를 부르지
+    않는다 (비용 0원). 한 글자라도 고쳤거나 다른 공고가 섞이면 Claude를 부른다."""
     calls: list[str] = []
 
     def claude(text: str) -> ExtractionResult:
@@ -51,13 +51,18 @@ def test_examples_skip_claude_in_claude_mode():
         return ExtractionResult(postings=[])
 
     extract = ExampleFirstExtractor(claude)
-    # 화면이 보내는 그대로 ('---' 줄로 나눔), normalize 노드처럼 가려서
-    examples = [scenario_text(p).strip() for p in ('near_pangyo', 'down_naju')]
-    text = mask_text('\n\n---\n\n'.join(examples))
-    companies = [p.company.value for p in extract(text).postings]
-    assert companies == ['(가상) 이음데이터랩(주)', '(가상) 빛가람그리드(주)']
+    with TestClient(create_app(str(tmp_path / 'cp.sqlite'), extractor=extract)) as c:
+        examples = c.get('/examples').json()
+        # 화면이 보내는 그대로: 공고 사이를 '---' 줄로 (page.tsx POSTING_SEPARATOR)
+        text = '\n\n---\n\n'.join(examples)
+        table = c.post('/sessions', json={'message': text}).json()['table']
+    assert [row['company']['value'] for row in table] == [
+        '(가상) 이음데이터랩(주)',
+        '(가상) 빛가람그리드(주)',
+    ]
     assert calls == []
 
+    text = mask_text(text)  # normalize 노드는 가린 글을 넘긴다
     changed = (text.replace('3,600만원', '3,700만원'), text + '\n처음 보는 공고', ' ', '------')
     for other in changed:
         extract(other)

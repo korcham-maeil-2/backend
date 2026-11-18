@@ -28,6 +28,7 @@ from backend.inputs.read import FileReader, daily_budget_from_env
 from backend.inputs.transcribe import ClaudeTranscriber, FixtureTranscriber, Transcriber
 from backend.monitoring import init_monitoring
 from backend.normalize import Extractor, make_extractor, parse_mode
+from backend.normalize.fixture import example_postings
 from backend.public_data.finlife import SavingsSource, savings_from_env
 from backend.public_data.rent import HttpRentFetcher, RentCache, RentEstimator, RentFetcher
 from backend.public_data.training import TrainingSource, training_from_env
@@ -167,6 +168,13 @@ def create_app(
         # normalize_mode: 프론트가 'fixture'면 '시연 모드' 표시를 띄운다.
         # local_support: false면 나이 칸을 숨긴다 (나이는 청년 지원을 고르는 데만 쓴다)
         return {'status': 'ok', 'normalize_mode': normalize_mode, 'local_support': local_support}
+
+    examples = example_postings()  # 서버를 켤 때 한 번 읽는다 (파일이 없으면 바로 알 수 있게)
+
+    @app.get('/examples')
+    def get_examples() -> list[str]:
+        """'예시로 사용법 보기'에 넣을 공고 글. 이 글만 넣으면 공고 정리에 Claude를 안 부른다."""
+        return examples
 
     # 세션 관련 주소들(/sessions ...)은 api/sessions.py에 모아 두고 여기서 붙인다.
     app.include_router(sessions_router)
