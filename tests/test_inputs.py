@@ -933,3 +933,52 @@ def test_same_file_twice_is_rejected():
         check_upload([f, UploadedFile('복사본.csv', f.data)])
     assert e.value.code == InputErrorCode.FILE_DUPLICATE
     assert e.value.file_name == '복사본.csv' and f.name in e.value.message
+
+
+# ── 이슈 #52: PDF 글자 수 부풀림, 공고마다 세는 글자 제한 ──
+
+
+def test_tidy_page_collapses_layout_spaces():
+    """화면 배치용 공백(잡코리아 'PDF로 저장'은 글의 66%)과 빈 줄을 줄인다."""
+    from backend.inputs.pdf import tidy_page
+
+    raw = '모집부문' + ' ' * 144 + '백엔드 개발\n\n\n   \n연봉\t\t3,600만원   \n'
+    assert tidy_page(raw) == '모집부문 백엔드 개발\n연봉 3,600만원'
+
+
+def test_print_margins_are_dropped_but_body_repeats_stay():
+    """쪽마다 위·아래에 되풀이되는 인쇄 줄(날짜·제목·주소)만 빼고, 본문 속 되풀이는 남긴다."""
+    from backend.inputs.pdf import drop_print_margins
+
+    head = '26. 11. 18. 오후 12:30 ㈜가나 채용 공고 | 잡코리아'
+    url = 'https://www.jobkorea.co.kr/Recruit/GI_Read/1'
+    pages = [f'{head}\n본문 {i}쪽\n자격요건\n우대 {i}\n끝 {i}\n{url}' for i in range(4)]
+    out = drop_print_margins(pages)
+    assert all(head not in p and url not in p for p in out)
+    assert all('자격요건' in p and '본문' in p for p in out)
+    assert drop_print_margins(pages[:2]) == pages[:2]  # 2쪽 이하는 그대로
+
+
+def test_layout_spaced_pdf_is_counted_without_padding():
+    """공백으로 부푼 PDF도 실제 글자 수로 센다 (예전: 공백 때문에 3만 자 제한에 걸렸다)."""
+    padded = ('근무조건' + ' ' * 100 + '주 5일 근무\n') * 30
+    content = read_pdf(pdf_bytes([padded]), 'padded.pdf')
+    [(_, text, _)] = content.text_pages
+    assert '  ' not in text
+    assert len(text) < len(padded) / 5
+
+
+def test_char_limit_is_per_posting_file():
+    """공고(파일)마다 MAX_POSTING_CHARS: 공고 두 개가 각각 그 안이면 합계가 넘어도 읽는다."""
+    from backend.inputs.limits import MAX_POSTING_CHARS
+
+    reader = FileReader(FixtureTranscriber())
+    lines = '\n'.join(f'항목{i}: 값{i}' for i in range(MAX_POSTING_CHARS // 14))
+    a = UploadedFile('a.csv', lines.encode('utf-8'))
+    b = UploadedFile('b.csv', (lines + '\n다른 공고: 1').encode('utf-8'))
+    results = reader.read([a, b])
+    assert sum(len(r.plain_text) for r in results) > MAX_POSTING_CHARS
+    big = '\n'.join(f'항목{i}: 값{i}' for i in range(MAX_POSTING_CHARS // 8))
+    with pytest.raises(FileInputError) as e:
+        reader.read([a, UploadedFile('big.csv', big.encode('utf-8'))])
+    assert e.value.code == InputErrorCode.FILE_TOO_LONG

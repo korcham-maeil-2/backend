@@ -12,6 +12,7 @@ OCR 글자는 스캐너가 기계로 읽은 것이라 이미지 인식과 똑같
 화면에 안 보이는 흰 글씨도 get_text에는 나온다 (알려진 한계).
 """
 
+import re
 import unicodedata
 from dataclasses import dataclass, field
 from typing import Literal
@@ -93,6 +94,42 @@ def _classify(text: str, coverage: float) -> PageMethod | None:
     return 'text' if chars else None
 
 
+_SPACES = re.compile(r'[ \t\u00a0\u3000]{2,}')
+_BLANK_LINES = re.compile(r'\n[ \t]*(?:\n[ \t]*)+')
+EDGE_LINES = 2  # 쪽 위·아래 몇 줄을 인쇄 머리줄 후보로 볼지
+
+
+def tidy_page(text: str) -> str:
+    """쪽 글 정리: 이어진 공백을 하나로, 줄 끝 공백과 빈 줄을 뺀다 (이슈 #52).
+
+    get_text(sort=True)는 화면 배치대로 줄을 맞추려고 공백을 넣는다. 잡코리아 공고를 'PDF로
+    저장'한 파일은 글의 66%가 공백이었다 (실제 22,300자 → 62,277자로 세어 3만 자 제한에 걸림).
+    인용 대조(checks.squash)는 공백을 무시하므로 정확도에는 영향이 없다.
+    """
+    text = _SPACES.sub(' ', text)
+    text = '\n'.join(line.rstrip() for line in text.split('\n'))
+    return _BLANK_LINES.sub('\n', text).strip()
+
+
+def drop_print_margins(pages: list[str]) -> list[str]:
+    """브라우저 인쇄가 쪽마다 위·아래에 넣는 줄(인쇄 날짜·페이지 제목·주소)을 뺀다.
+
+    쪽 위·아래 EDGE_LINES줄 가운데 3쪽 이상, 그리고 절반 이상의 쪽에 똑같이 나오는 줄만 뺀다
+    (본문 속 '자격요건' 같은 되풀이 제목은 위·아래 끝에 오지 않아 남는다).
+    """
+    if len(pages) < 3:
+        return pages
+    seen: dict[str, int] = {}
+    for page in pages:
+        lines = [line.strip() for line in page.split('\n') if line.strip()]
+        for line in set(lines[:EDGE_LINES] + lines[-EDGE_LINES:]):
+            seen[line] = seen.get(line, 0) + 1
+    margins = {line for line, n in seen.items() if n >= max(3, (len(pages) + 1) // 2)}
+    if not margins:
+        return pages
+    return ['\n'.join(ln for ln in p.split('\n') if ln.strip() not in margins) for p in pages]
+
+
 def read_pdf(data: bytes, name: str, max_vision: int = MAX_VISION_PAGES) -> PdfContent:
     """max_vision: 이 요청에서 아직 이미지로 읽을 수 있는 쪽 수. 넘으면 그리기 전에 422."""
     try:
@@ -125,7 +162,7 @@ def read_pdf(data: bytes, name: str, max_vision: int = MAX_VISION_PAGES) -> PdfC
             # 1) 쪽마다 판별만 먼저 한다 (그림으로 그리는 건 비싸서, 장 수 상한을 본 뒤에)
             plan = []
             for page in doc:
-                text = page.get_text(sort=True).strip()
+                text = tidy_page(page.get_text(sort=True))
                 coverage = _image_coverage(page)
                 method = _classify(text, coverage)
                 plan.append((page.number, text, method))
@@ -142,6 +179,10 @@ def read_pdf(data: bytes, name: str, max_vision: int = MAX_VISION_PAGES) -> PdfC
                     name,
                 )
             # 2) 그림 쪽만 그린다
+            # 글자로 읽는 쪽들에서 인쇄 머리줄을 뺀다 (판별은 위에서 이미 끝났다)
+            kept = drop_print_margins([text for _, text, m in plan if m not in (None, 'vision')])
+            texts = iter(kept)
+            plan = [(i, next(texts) if m not in (None, 'vision') else t, m) for i, t, m in plan]
             for index, text, method in plan:
                 if method == 'vision':
                     content.image_pages.append((index + 1, _render(doc[index])))
