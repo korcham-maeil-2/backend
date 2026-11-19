@@ -41,6 +41,7 @@ from defusedxml import ElementTree
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.normalize.checks import region_by_code
+from backend.public_data import http
 
 logger = logging.getLogger(__name__)
 
@@ -132,9 +133,8 @@ class HttpRentFetcher:
         httpx 연결은 이벤트 루프에 묶이므로, 루프가 바뀌면(동기로 돌린 테스트 등) 새로 만든다."""
         loop = asyncio.get_running_loop()
         if self._client is None or self._loop is not loop:
-            self._client = httpx.AsyncClient(
-                timeout=httpx.Timeout(15, connect=10),
-                limits=httpx.Limits(max_connections=CONCURRENCY * 2),
+            self._client = http.async_client(
+                httpx.Timeout(15, connect=10), httpx.Limits(max_connections=CONCURRENCY * 2)
             )
             self._loop = loop
         return self._client

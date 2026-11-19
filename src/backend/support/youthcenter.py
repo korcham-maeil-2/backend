@@ -21,6 +21,8 @@ from typing import Any, Protocol
 
 import httpx
 
+from backend.public_data import http as public_http
+
 logger = logging.getLogger(__name__)
 # httpx는 INFO 로그에 요청 주소를 그대로 찍는다 (주소에 인증키가 들어 있다)
 logging.getLogger('httpx').setLevel(logging.WARNING)
@@ -120,7 +122,7 @@ class YouthCenterClient:
         """keep: 저장·반환할 정책만 고르는 함수 (예: 주거·금융복지문화 분류만). 없으면 전부."""
         self._api_key = api_key
         self._cache_path = Path(cache_path)
-        self._http = http or httpx.Client(timeout=TIMEOUT)
+        self._http = http or public_http.client(TIMEOUT)
         # 시군구 코드 → (마지막으로 조회에 실패한 시각, 그때의 이유)
         self._failed: dict[str, tuple[float, str]] = {}
         self._keep = keep

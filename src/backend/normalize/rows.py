@@ -12,6 +12,7 @@ source_text에는 원문에서 확인된 인용만 담는다 (원문에 없는 �
 사용자에게 물어볼 것(questions_to_ask)도 여기서 코드가 빈칸을 보고 만든다.
 """
 
+import re
 from collections.abc import Callable
 from typing import Literal
 
@@ -137,6 +138,10 @@ def rate_cell(e: ExtractedRate, text: str) -> RateCell:
     )
 
 
+# AI가 근무지 인용에 이름표까지 붙여 올 때가 있다 ('근무지: 대전 유성구') → 화면 글에서는 뗀다
+_LOCATION_LABEL = re.compile(r'^\s*(?:근무\s*지역?|근무\s*장소|소재지|위치)\s*[:：]\s*')
+
+
 def location_cell(e: ExtractedLocation, text: str) -> tuple[LocationCell, bool]:
     """근무지 셀과 '조회에 쓸 지역 코드를 정했는지'를 돌려준다.
 
@@ -151,7 +156,7 @@ def location_cell(e: ExtractedLocation, text: str) -> tuple[LocationCell, bool]:
     region = checks.find_region(e.value.sido, e.value.sigungu)
     usable = region is not None and region.selectable
     loc = Location(
-        raw=e.quote.strip(),
+        raw=_LOCATION_LABEL.sub('', e.quote).strip(),
         sido=region.sido if region else None,
         sigungu=region.sigungu if region else None,
         lawd_cd=region.lawd_cd if usable else None,
