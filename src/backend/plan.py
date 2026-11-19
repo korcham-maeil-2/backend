@@ -9,6 +9,8 @@
   before   '이사 전'      이사하는 경우만. 보증금 마련
   YYYY-MM  그달           이사한 달의 할 일(전입신고), 정책은 마감 달(신청 중) 또는 시작 달(곧 시작)
   anytime  '언제든'       상시·기간 모름 정책
+  job      '입사 N개월 뒤' 공고에서 읽은 날: 수습이 끝나는 달(수습 중 급여가 100%가 아닐 때),
+                          회사 주거지원비가 끝나는 달(이사하는 경우, 기간을 알 때)
 입사일을 모르므로 이사한 달은 '이번 달'로 두지 않고 따로 '이사한 달'로 보여 준다.
 
 규칙 (코드로 정한다, 설계 원칙: 날짜·숫자는 코드):
@@ -34,6 +36,7 @@ from pydantic import Field
 
 from backend.calc.remaining import OutputModel, housing_aid
 from backend.calc.summary import CalculationResult
+from backend.calc.text import won
 from backend.normalize.schema import ComparisonRow
 from backend.public_data.training import ncs_for_job
 from backend.support.policies import FIRST_JOB_MAX, LocalSupport, SupportPolicy, is_first_job
@@ -44,12 +47,15 @@ ANYTIME_MAX = 5
 _DEPOSIT_WORDS = re.compile(r'보증금|전세|전월세|버팀목|보증부')
 _RENT_WORDS = re.compile(r'월세')
 
-ItemKind = Literal['deposit', 'move_in', 'policy']
-SlotKind = Literal['before', 'move_month', 'month', 'start', 'anytime']
+ItemKind = Literal['deposit', 'move_in', 'policy', 'milestone']
+SlotKind = Literal['before', 'move_month', 'month', 'start', 'job', 'anytime']
 
 
 class PlanItem(OutputModel):
-    kind: ItemKind = Field(description='deposit=보증금 마련, move_in=전입신고, policy=지원 신청')
+    kind: ItemKind = Field(
+        description='deposit=보증금 마련, move_in=전입신고, policy=지원 신청, '
+        'milestone=공고에서 읽은 날 (수습 끝·주거지원비 끝)'
+    )
     title: str
     detail: str | None = Field(default=None, description='한 줄 설명 (해요체)')
     when: str | None = Field(
@@ -69,7 +75,7 @@ class PlanItem(OutputModel):
 
 class PlanSlot(OutputModel):
     kind: SlotKind
-    label: str = Field(description="'이사 전', '이사한 달', '2026년 12월', '언제든'")
+    label: str = Field(description="'이사 전', '이사한 달', '2026년 12월', '입사 3개월 뒤' 등")
     month: str | None = Field(default=None, description='달력 달이면 YYYY-MM')
     items: list[PlanItem]
 
@@ -221,6 +227,38 @@ MOVE_IN_DORM = MOVE_IN.model_copy(
 )
 
 
+def _milestones(row: ComparisonRow | None, moving: bool) -> dict[int, list[PlanItem]]:
+    """공고에서 읽은 날 (입사 몇 개월 뒤 → 할 일). 돈이 바뀌는 때만 넣는다."""
+    found: dict[int, list[PlanItem]] = {}
+    if row is None:
+        return found
+    months, rate = row.probation_months.value, row.probation_pay_rate.value
+    if months and rate is not None and rate < 1:
+        found.setdefault(months, []).append(
+            PlanItem(
+                kind='milestone',
+                title='수습이 끝나요',
+                detail=f'수습 동안 월급의 {round(rate * 100)}%를 받다가, 이때부터 100%를 받아요.',
+                when=f'입사 {months}개월 뒤',
+                source='공고',
+            )
+        )
+    aid = housing_aid(row)
+    if moving and aid and aid[1]:  # 주거지원비는 이사하는 경우에만 남는 돈에 들어간다 (calc)
+        amount, aid_months = aid
+        found.setdefault(aid_months, []).append(
+            PlanItem(
+                kind='milestone',
+                title='회사 주거지원비가 끝나요',
+                detail=f'매달 받던 {won(amount)}이 끝나서, 이때부터 남는 돈이 그만큼 줄어요.',
+                when=f'입사 {aid_months}개월 뒤',
+                amount_krw=amount,
+                source='공고',
+            )
+        )
+    return found
+
+
 def _posting_plan(
     posting_id: str,
     company: str | None,
@@ -279,6 +317,8 @@ def _posting_plan(
         ):
             continue
         slots.setdefault((kind, month), []).append(item)
+    for after, items in _milestones(row, moving).items():
+        slots[('job', f'{after:03d}')] = items  # 입사 몇 개월 뒤 (세 자리로 둬서 순서대로)
     anytime = slots.get(('anytime', None), [])
     if len(anytime) > ANYTIME_MAX:
         notes.append(
@@ -289,7 +329,7 @@ def _posting_plan(
     if len(start := slots.get(('start', None), [])) > FIRST_JOB_MAX:
         slots[('start', None)] = start[:FIRST_JOB_MAX]
 
-    order = {'before': 0, 'move_month': 1, 'month': 2, 'start': 3, 'anytime': 4}
+    order = {'before': 0, 'move_month': 1, 'month': 2, 'start': 3, 'job': 4, 'anytime': 5}
     built = []
     for (kind, month), items in sorted(
         slots.items(), key=lambda kv: (order[kv[0][0]], kv[0][1] or '')
@@ -297,6 +337,8 @@ def _posting_plan(
         if kind == 'month' and month:
             y, m = month.split('-')
             label = f'{y}년 {int(m)}월'
+        elif kind == 'job' and month:
+            label, month = f'입사 {int(month)}개월 뒤', None  # 입사일을 몰라 달력 달이 아니다
         else:
             label = {
                 'before': '이사 전',

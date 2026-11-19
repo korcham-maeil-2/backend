@@ -34,6 +34,7 @@ from backend.public_data.rent import HttpRentFetcher, RentCache, RentEstimator, 
 from backend.public_data.training import TrainingSource, training_from_env
 from backend.report import ClaudeReviewer, ClaudeWriter, ReportAgent
 from backend.support import PolicySource, is_relevant, source_from_env
+from backend.support.terms import ClaudeTermsReader, PolicyTermsService, TermsReader, TermsStore
 from backend.support.youthcenter import API_KEY_ENV as YOUTHCENTER_KEY_ENV
 
 # 그래프 상태를 저장할 SQLite 파일 위치 (Docker에서는 이 경로를 볼륨에 둔다).
@@ -62,6 +63,7 @@ def create_app(
     report_agent: ReportAgent | None = None,
     savings_source: SavingsSource | None = None,
     training_source: TrainingSource | None = None,
+    terms_reader: TermsReader | None = None,
 ) -> FastAPI:
     """FastAPI 앱을 만들어 돌려준다.
 
@@ -100,6 +102,9 @@ def create_app(
         normalize_mode = 'custom'
     if report_agent is None and normalize_mode == 'claude' and _has_api_key_env():
         report_agent = ReportAgent(ClaudeWriter(), ClaudeReviewer())
+    # 정착 플랜 정책 카드: 정책 원문을 Claude가 읽는다 (리포트와 같은 조건: 실제 모드 + 키)
+    if terms_reader is None and normalize_mode == 'claude' and _has_api_key_env():
+        terms_reader = ClaudeTermsReader()
     if transcriber is not None:
         file_reader = FileReader(transcriber)
     elif normalize_mode == 'claude':
@@ -131,6 +136,11 @@ def create_app(
             if source is None:
                 logger.info('YOUTHCENTER_API_KEY가 없어 청년 지원 정책을 조회하지 않습니다.')
             app.state.support_source = source
+            app.state.policy_terms = (
+                PolicyTermsService(source, terms_reader, TermsStore(db_path))
+                if source is not None and terms_reader is not None
+                else None
+            )
             app.state.report_agent = report_agent
             app.state.graph = build_graph(saver, extractor, rent_estimator, source, report_agent)
             app.state.file_reader = file_reader
