@@ -546,6 +546,19 @@ def test_location_edge_cases(sido, sigungu, quote, lawd_cd, status):
     assert all(q.fields == ['location'] for q in region)
 
 
+def test_location_label_is_not_part_of_the_place():
+    """AI가 '근무지: …'처럼 이름표까지 인용해도 화면의 근무지 글에는 붙이지 않는다."""
+    from backend.normalize.schema import ExtractedLocation, LocationGuess
+
+    quote = '근무지: 대전 유성구 도룡동'
+    row = _posting_with(
+        quote,
+        location=ExtractedLocation(value=LocationGuess(sido='대전', sigungu='유성구'), quote=quote),
+    )
+    assert row.location.value.raw == '대전 유성구 도룡동'
+    assert row.location.status == 'confirmed'  # 원문 대조는 인용 그대로 한다
+
+
 def test_questions_are_made_by_code():
     """물어볼 것은 코드가 빈칸을 보고 만든다 (LLM이 아님). 주거·통근 질문은 하지 않는다."""
     assert row_for('stay_ulsan').questions_to_ask == [
