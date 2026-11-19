@@ -51,8 +51,11 @@ Kind = Literal[
     'student',
     'other',
 ]
-MAX_IDS = 20  # 한 번에 읽을 정책 수 (플랜에 보이는 정책만 부른다)
+MAX_IDS = 20  # 한 요청에서 처음 읽는 정책 수 (저장된 것은 개수와 상관없이 다 돌려준다)
 READ_THREADS = 4  # 처음 보는 정책을 동시에 읽는 수
+RETRY_AFTER_SECONDS = (
+    60 * 60
+)  # 읽기에 실패한 정책은 한 시간 뒤에 다시 (같은 실패에 돈을 계속 쓰지 않게)
 
 
 class Condition(OutputModel):
@@ -251,6 +254,15 @@ class PolicyTermsService:
         self._source = source
         self._read = reader
         self._store = store
+        # 같은 정책을 여러 요청이 동시에 처음 보면 한 번만 읽는다 (정책마다 자물쇠)
+        self._guard = threading.Lock()
+        self._locks: dict[str, threading.Lock] = {}
+        # 읽기에 실패한 정책: (원문 sha, 다시 읽을 때). 잘림·거절은 다시 해도 같기 쉽다
+        self._failed: dict[str, tuple[str, float]] = {}
+
+    def _lock(self, plcy_no: str) -> threading.Lock:
+        with self._guard:
+            return self._locks.setdefault(plcy_no, threading.Lock())
 
     def _originals(self, lawd_cds: Iterable[str]) -> dict[str, dict[str, Any]]:
         """근무지 지역들의 정책 원문 (온통청년 조회는 하루 캐시라 보통 바로 끝난다)."""
@@ -263,27 +275,48 @@ class PolicyTermsService:
                 logger.warning('정책 원문을 불러오지 못함 (%s)', code)
         return found
 
-    def _one(self, plcy_no: str, policy: dict[str, Any]) -> PolicyTerms | None:
-        text = source_text(policy)
-        sha = _sha(text)
-        saved = self._store.get(plcy_no, sha)
-        if saved is not None:
-            return saved
-        try:
-            # Claude는 가린 글을 받는다 (create_message가 보내기 직전에 가림) → 가린 글과 대조
-            terms = checked(self._read(text), mask_text(text))
-        except TermsError:
-            return None
-        except Exception:  # 정책 하나가 잘못돼도 나머지는 보여 준다 (요청 전체가 500이 되지 않게)
-            logger.exception('정책 조건을 읽다가 예상 못 한 오류 (%s)', plcy_no)
-            return None
-        if terms is not None:
-            self._store.put(plcy_no, sha, terms)
-        return terms
+    def _one(self, plcy_no: str, text: str, sha: str) -> PolicyTerms | None:
+        with self._lock(plcy_no):
+            # 기다리는 동안 다른 요청이 읽어 저장했을 수 있다
+            saved = self._store.get(plcy_no, sha)
+            if saved is not None:
+                return saved
+            failed = self._failed.get(plcy_no)
+            if failed and failed[0] == sha and time.time() < failed[1]:
+                return None
+            try:
+                # Claude는 가린 글을 받는다 (create_message가 보내기 직전에 가림) → 가린 글과 대조
+                terms = checked(self._read(text), mask_text(text))
+            except TermsError:
+                terms = None
+            except (
+                Exception
+            ):  # 정책 하나가 잘못돼도 나머지는 보여 준다 (요청 전체가 500이 되지 않게)
+                logger.exception('정책 조건을 읽다가 예상 못 한 오류 (%s)', plcy_no)
+                terms = None
+            if terms is None:
+                self._failed[plcy_no] = (sha, time.time() + RETRY_AFTER_SECONDS)
+            else:
+                self._store.put(plcy_no, sha, terms)
+            return terms
 
     def get(self, lawd_cds: list[str], ids: list[str]) -> dict[str, PolicyTerms]:
+        """저장된 조건은 다 돌려주고, 처음 보는 정책은 ids 순서로 MAX_IDS개까지만 읽는다."""
         originals = self._originals(lawd_cds)
-        wanted = [i for i in dict.fromkeys(ids) if i in originals][:MAX_IDS]
+        found: dict[str, PolicyTerms] = {}
+        todo: list[tuple[str, str, str]] = []
+        for i in dict.fromkeys(ids):
+            if i not in originals:
+                continue
+            text = source_text(originals[i])
+            sha = _sha(text)
+            saved = self._store.get(i, sha)
+            if saved is not None:
+                found[i] = saved
+            else:
+                todo.append((i, text, sha))
         with ThreadPoolExecutor(READ_THREADS) as pool:
-            read = pool.map(lambda i: (i, self._one(i, originals[i])), wanted)
-            return {i: terms for i, terms in read if terms is not None}
+            for i, terms in pool.map(lambda t: (t[0], self._one(*t)), todo[:MAX_IDS]):
+                if terms is not None:
+                    found[i] = terms
+        return found

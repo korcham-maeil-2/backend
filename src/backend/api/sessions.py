@@ -28,6 +28,7 @@ import uuid
 import weakref
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from itertools import zip_longest
 from typing import Annotated
 
 from fastapi import APIRouter, File, Form, Request, UploadFile, status
@@ -496,14 +497,12 @@ async def get_policy_terms(session_id: str, request: Request) -> TermsResult:
     plan = current.plan
     if service is None or plan is None:
         return TermsResult(status='off', terms={})
-    # 화면에 보이는 순서대로 (상한을 넘으면 뒤쪽이 빠진다)
-    ids = [
-        item.policy_id
+    # 회사마다 번갈아 (처음 읽는 수에 상한이 있어도 둘째·셋째 회사 정책이 빠지지 않게)
+    per_posting = [
+        [item.policy_id for slot in posting.slots for item in slot.items if item.policy_id]
         for posting in [*plan.postings, *plan.alternates]
-        for slot in posting.slots
-        for item in slot.items
-        if item.policy_id
     ]
+    ids = [i for row in zip_longest(*per_posting) for i in row if i]
     codes = [p.lawd_cd for p in plan.postings if p.lawd_cd]
     return TermsResult(status='ok', terms=await asyncio.to_thread(service.get, codes, ids))
 

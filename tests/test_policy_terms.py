@@ -149,3 +149,25 @@ def test_one_broken_read_does_not_fail_the_others(tmp_path):
 
     got = service(tmp_path, reader, [POLICY, other]).get(['46170'], ['20260001', '20260002'])
     assert list(got) == ['20260001']
+
+
+def test_failed_read_is_not_retried_right_away(tmp_path):
+    """잘림·거절처럼 실패한 정책은 한동안 다시 읽지 않는다 (요청마다 돈을 쓰지 않게)."""
+    reader = FakeReader(error=True)
+    terms = service(tmp_path, reader)
+    assert terms.get(['46170'], ['20260001']) == {}
+    assert terms.get(['46170'], ['20260001']) == {}
+    assert len(reader.calls) == 1
+
+
+def test_saved_terms_are_all_returned_and_only_new_ones_are_capped(tmp_path, monkeypatch):
+    """저장된 조건은 상한과 상관없이 다 돌려주고, 처음 읽는 것만 상한까지."""
+    import backend.support.terms as terms_module
+
+    monkeypatch.setattr(terms_module, 'MAX_IDS', 1)
+    second = {**POLICY, 'plcyNo': '20260002', 'plcyNm': '청년 교통비 지원'}
+    reader = FakeReader()
+    terms = service(tmp_path, reader, policies=(POLICY, second))
+    assert list(terms.get(['46170'], ['20260001', '20260002'])) == ['20260001']
+    assert set(terms.get(['46170'], ['20260001', '20260002'])) == {'20260001', '20260002'}
+    assert len(reader.calls) == 2  # 정책마다 한 번씩만
