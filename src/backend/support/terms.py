@@ -24,6 +24,7 @@ import threading
 import time
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from pathlib import Path
 from typing import Any, Literal
 
@@ -207,7 +208,7 @@ class TermsStore:
     def __init__(self, path: str | Path) -> None:
         self._path = Path(path)
         self._lock = threading.Lock()
-        with self._connect() as db:
+        with closing(self._connect()) as db, db:
             db.execute(
                 'CREATE TABLE IF NOT EXISTS policy_terms '
                 '(plcy_no TEXT PRIMARY KEY, source_sha TEXT, body TEXT, saved_at REAL)'
@@ -218,7 +219,7 @@ class TermsStore:
 
     def get(self, plcy_no: str, sha: str) -> PolicyTerms | None:
         try:
-            with self._lock, self._connect() as db:
+            with self._lock, closing(self._connect()) as db, db:
                 row = db.execute(
                     'SELECT body FROM policy_terms WHERE plcy_no = ? AND source_sha = ?',
                     (plcy_no, sha),
@@ -230,7 +231,7 @@ class TermsStore:
 
     def put(self, plcy_no: str, sha: str, terms: PolicyTerms) -> None:
         try:
-            with self._lock, self._connect() as db:
+            with self._lock, closing(self._connect()) as db, db:
                 db.execute(
                     'INSERT OR REPLACE INTO policy_terms VALUES (?, ?, ?, ?)',
                     (plcy_no, sha, terms.model_dump_json(), time.time()),
@@ -272,6 +273,9 @@ class PolicyTermsService:
             # Claude는 가린 글을 받는다 (create_message가 보내기 직전에 가림) → 가린 글과 대조
             terms = checked(self._read(text), mask_text(text))
         except TermsError:
+            return None
+        except Exception:  # 정책 하나가 잘못돼도 나머지는 보여 준다 (요청 전체가 500이 되지 않게)
+            logger.exception('정책 조건을 읽다가 예상 못 한 오류 (%s)', plcy_no)
             return None
         if terms is not None:
             self._store.put(plcy_no, sha, terms)

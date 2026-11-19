@@ -4,8 +4,6 @@
                                                  (금감원, 가입 권유 아님)
   GET /plan/training/{lawd_cd}   → TrainingList  근무지 근처 재직자 오프라인 강의 (고용24)
                                                  ?ncs=20 이면 그 직무(NCS 대분류) 과정 먼저
-  POST /plan/policy-terms        → TermsResult   플랜 정책 카드의 지원 내용·주의·신청 조건
-                                                 (정책 원문을 Claude가 읽음, 개인정보는 보내지 않음)
 
 키가 없으면 status='off', 조회가 실패하면 status='unavailable'로 이유와 함께 돌려준다
 (화면은 그 칸만 숨긴다).
@@ -15,14 +13,12 @@ import asyncio
 from typing import Annotated
 
 from fastapi import APIRouter, Query, Request, status
-from pydantic import BaseModel, Field
 
 from backend.api.errors import AppError, ErrorCode, error_responses
 from backend.normalize.checks import region_by_code
 from backend.public_data.finlife import SavingsList, SavingsSource
 from backend.public_data.training import TrainingList, TrainingSource
 from backend.support.policies import today_kst
-from backend.support.terms import MAX_IDS, PolicyTermsService, TermsResult
 
 router = APIRouter(prefix='/plan', tags=['plan'], responses=error_responses(422, 500))
 
@@ -49,22 +45,3 @@ async def get_training(
         )
     source: TrainingSource = request.app.state.training_source
     return await asyncio.to_thread(source.get, lawd_cd, today_kst(), ncs)
-
-
-class TermsRequest(BaseModel):
-    """플랜에 보이는 정책 번호와 그 근무지 지역 (공개 정보만, 사용자 정보는 받지 않는다)."""
-
-    lawd_cds: list[Annotated[str, Field(pattern=r'^\d{5}$')]] = Field(max_length=5)
-    ids: list[Annotated[str, Field(pattern=r'^[0-9A-Za-z]{1,32}$')]] = Field(max_length=MAX_IDS)
-
-
-@router.post('/policy-terms')
-async def get_policy_terms(body: TermsRequest, request: Request) -> TermsResult:
-    """정책마다 무엇을 주는지·주의할 점·신청 조건 (원문 인용 포함). 처음 보는 정책만 Claude가
-    읽고 저장해 둔다. 정책을 읽지 않는 서버(키 없음 등)면 status='off'
-    (화면은 원문 요약을 보여 준다)."""
-    service: PolicyTermsService | None = getattr(request.app.state, 'policy_terms', None)
-    if service is None:
-        return TermsResult(status='off', terms={})
-    terms = await asyncio.to_thread(service.get, body.lawd_cds, body.ids)
-    return TermsResult(status='ok', terms=terms)
