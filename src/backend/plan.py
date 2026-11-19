@@ -239,7 +239,6 @@ def _milestones(row: ComparisonRow | None, moving: bool) -> dict[int, list[PlanI
                 kind='milestone',
                 title='수습이 끝나요',
                 detail=f'수습 동안 월급의 {round(rate * 100)}%를 받다가, 이때부터 100%를 받아요.',
-                when=f'입사 {months}개월 뒤',
                 source='공고',
             )
         )
@@ -251,7 +250,6 @@ def _milestones(row: ComparisonRow | None, moving: bool) -> dict[int, list[PlanI
                 kind='milestone',
                 title='회사 주거지원비가 끝나요',
                 detail=f'매달 받던 {won(amount)}이 끝나서, 이때부터 남는 돈이 그만큼 줄어요.',
-                when=f'입사 {aid_months}개월 뒤',
                 amount_krw=amount,
                 source='공고',
             )
