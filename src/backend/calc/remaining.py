@@ -225,6 +225,10 @@ class PostingResult(OutputModel):
     fixed_expenses: Item
     scenarios: list[Scenario]
     notes: list[str] = Field(default_factory=list)
+    probation_net: int | None = Field(
+        default=None,
+        description='수습 동안 세후 월급 (수습 급여가 100% 미만일 때만). 정착 플랜이 쓴다',
+    )
 
 
 # ── 계산 ────────────────────────────────────────────────────────
@@ -372,6 +376,24 @@ def _net_income(
         what = f'{what} + {on_top.source}'
     source = f'{what} → 4대보험·소득세를 뺀 값'
     return Item(label=label, value=slip.net, status=weakest(used), source=source), slip, notes
+
+
+def _probation_net(
+    row: ComparisonRow, profile: UserProfile, allowances: Item, on_top: Item
+) -> int | None:
+    """수습 동안 세후 월급: 급여 칸만 수습 비율로 줄여 한 번 더 계산한다 (수당·식대는 그대로)."""
+    rate, picked = row.probation_pay_rate.value, _salary_cell(row)
+    if not row.probation_months.value or rate is None or not 0 < rate < 1 or picked is None:
+        return None
+    kind, cell = picked
+    field = 'annual_salary_krw' if kind == 'annual' else 'monthly_salary_krw'
+    cut = row.model_copy(
+        update={field: cell.model_copy(update={'value': round(cell.value * rate)})}
+    )
+    try:
+        return _net_income(cut, profile, allowances, on_top)[0].value
+    except ValueError:  # 줄인 급여가 간이세액표 밖이면 금액 없이 둔다
+        return None
 
 
 def _fixed_expenses(profile: UserProfile | None) -> Item:
@@ -565,4 +587,9 @@ def monthly_remaining(row: ComparisonRow, profile: UserProfile | None) -> Postin
         fixed_expenses=base[1],
         scenarios=[commute, move],
         notes=notes,
+        probation_net=(
+            _probation_net(row, profile or UserProfile(), allowances, on_top)
+            if net.value is not None
+            else None
+        ),
     )

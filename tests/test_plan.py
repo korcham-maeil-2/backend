@@ -380,3 +380,40 @@ def test_milestones_from_posting_only_when_money_changes():
     table[0]['probation_pay_rate']['value'] = 1.0
     labels = slots_of(build_plan(result, None, table, TODAY))
     assert '입사 3개월 뒤' not in labels and '입사 24개월 뒤' in labels
+
+
+def test_milestones_show_remaining_before_and_after():
+    """입사한 뒤 칸: 그날 앞뒤로 매달 남는 돈. 계산 결과(수습 끝·지원 받는 때)에서 거꾸로 짚는다."""
+
+    def paid(**costs):  # 나주 공고는 급여가 내규라, 연봉을 넣었다고 본다
+        table = scenario_table('down_naju')
+        table[0]['salary_type']['value'] = 'annual'
+        table[0]['annual_salary_krw'] = {'value': 36_000_000, 'status': 'user_input'}
+        profile = naju_profile(27)
+        profile['postings']['posting-1'] = {**profile['postings']['posting-1'], **costs}
+        return table, calculate_all(table, profile, NAJU_RENT)
+
+    table, result = paid()
+    [posting] = result['postings']
+    move = next(s for s in posting['scenarios'] if s['case'] == 'move')
+    remaining, net = move['monthly_remaining'], posting['net_income']['value']
+    cut = posting['probation_net']
+    assert cut is not None and 0 < cut < net  # 수습 90% → 세후 월급도 줄어든다
+    aid_krw = table[0]['housing_allowance_monthly_krw']['value']
+    plan = build_plan(result, None, table, TODAY)
+    item = {s.label: s.items[0] for s in plan.postings[0].slots if s.kind == 'job'}
+    probation, aid = item['입사 3개월 뒤'], item['입사 24개월 뒤']
+    assert (probation.remaining_before, probation.remaining_after) == (
+        remaining - (net - cut),
+        remaining,
+    )
+    assert (aid.remaining_before, aid.remaining_after) == (remaining, remaining - aid_krw)
+    # 새 집 주거비 < 지원비면 주거비가 0원으로 막혀 줄어드는 만큼을 모른다 → 금액 없이
+    table, result = paid(move_housing={'value': aid_krw // 2})
+    plan = build_plan(result, None, table, TODAY)
+    assert all(
+        i.remaining_before is None and i.remaining_after is None
+        for s in plan.postings[0].slots
+        if s.kind == 'job'
+        for i in s.items
+    )
