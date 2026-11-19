@@ -36,6 +36,7 @@ from pydantic import Field
 
 from backend.calc.remaining import OutputModel
 from backend.normalize.checks import region_by_code
+from backend.public_data import http
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +133,8 @@ def http_fetcher(keys: dict[Kind, str]) -> Fetcher:
         if ncs:  # 직무(NCS 대분류)로 좁힌다 ('20' → 정보통신 과정만, 2026-11-18 확인)
             params['srchNcs1'] = ncs
         try:
-            body = httpx.get(url, params=params, timeout=TIMEOUT).json()
+            with http.client(TIMEOUT) as client:
+                body = client.get(url, params=params).json()
         except (httpx.HTTPError, ValueError) as e:
             raise TrainingError(type(e).__name__) from e
         # 응답 모양이 다르면(목록이 아님 등) 500 대신 '불러오지 못함'으로

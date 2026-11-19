@@ -27,6 +27,7 @@ import httpx
 from pydantic import Field
 
 from backend.calc.remaining import OutputModel
+from backend.public_data import http
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +111,7 @@ def http_fetcher(api_key: str) -> Fetcher:
 
     def fetch() -> dict[str, Any]:
         base, options, month, page = [], [], None, 1
-        with httpx.Client(timeout=TIMEOUT) as client:
+        with http.client(TIMEOUT) as client:
             while True:
                 params = {'auth': api_key, 'topFinGrpNo': BANKS, 'pageNo': page}
                 try:
