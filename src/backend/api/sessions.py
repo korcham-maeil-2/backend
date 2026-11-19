@@ -28,6 +28,7 @@ import uuid
 import weakref
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from itertools import zip_longest
 from typing import Annotated
 
 from fastapi import APIRouter, File, Form, Request, UploadFile, status
@@ -66,6 +67,7 @@ from backend.report import ReportAgent, ReportCheck
 from backend.report import skipped as report_skipped
 from backend.support import LocalSupport, find_local_support
 from backend.support.policies import today_kst
+from backend.support.terms import PolicyTermsService, TermsResult
 
 # APIRouter: 관련된 주소들을 묶는 단위. prefix='/sessions'라서 아래 '/{session_id}'는
 # 실제로 '/sessions/{session_id}'가 된다. tags는 /docs 화면에서 묶어 보여 줄 이름.
@@ -479,6 +481,30 @@ async def get_local_support(session_id: str, request: Request) -> LocalSupport |
     values = (await graph.aget_state(_config(session_id))).values
     found = await _local_support_for(request, values.get('table', []), values.get('user_profile'))
     return _local_support(found)
+
+
+@router.get('/{session_id}/policy-terms', responses=error_responses(404))
+async def get_policy_terms(session_id: str, request: Request) -> TermsResult:
+    """정착 플랜에 보이는 정책마다 지원 내용·주의·신청 조건 (원문 인용 포함).
+
+    정책 원문(공개 자료)만 Claude가 읽는다. 사용자 정보는 보내지 않는다 (대회 규정 제7조).
+    읽을 정책은 이 세션의 플랜에서 서버가 고른다 — 화면이 보낸 번호를 받지 않아, 아무 정책이나
+    읽게 해서 비용을 쓰게 할 수 없다. 처음 보는 정책만 읽고 저장해 모든 사용자가 같이 쓴다.
+    플랜이 없거나 정책을 읽지 않는 서버(키 없음 등)면 status='off' (화면은 정책 이름만 보여 준다).
+    """
+    current = await _snapshot(_graph(request), session_id)  # 없는 세션이면 404
+    service: PolicyTermsService | None = getattr(request.app.state, 'policy_terms', None)
+    plan = current.plan
+    if service is None or plan is None:
+        return TermsResult(status='off', terms={})
+    # 회사마다 번갈아 (처음 읽는 수에 상한이 있어도 둘째·셋째 회사 정책이 빠지지 않게)
+    per_posting = [
+        [item.policy_id for slot in posting.slots for item in slot.items if item.policy_id]
+        for posting in [*plan.postings, *plan.alternates]
+    ]
+    ids = [i for row in zip_longest(*per_posting) for i in row if i]
+    codes = [p.lawd_cd for p in plan.postings if p.lawd_cd]
+    return TermsResult(status='ok', terms=await asyncio.to_thread(service.get, codes, ids))
 
 
 @router.get('/{session_id}', responses=error_responses(404))

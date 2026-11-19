@@ -447,6 +447,11 @@ def _newer(a: SupportPolicy, b: SupportPolicy) -> SupportPolicy:
     return max(a, b, key=lambda p: (_STATUS_RANK[p.apply_status], _deadline(p)))
 
 
+def _for_people(policy: dict[str, Any]) -> bool:
+    """사람이 신청하는 지원인지. 온통청년에는 기관이 맡기는 연구용역도 정책으로 올라온다."""
+    return '연구용역' not in f'{_text(policy, "plcyNm")} {_text(policy, "plcySprtCn")}'
+
+
 def select_policies(
     raw: list[dict[str, Any]],
     region: Region,
@@ -465,6 +470,8 @@ def select_policies(
         categories = _categories(policy)
         low, high = _age_range(policy)
         if not _text(policy, 'plcyNo') or not categories or not _age_ok(age, low, high):
+            continue
+        if not _for_people(policy):
             continue
         owner = _scope(policy, region)
         apply = _apply(policy, today)

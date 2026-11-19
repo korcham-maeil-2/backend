@@ -9,6 +9,8 @@
   before   '이사 전'      이사하는 경우만. 보증금 마련
   YYYY-MM  그달           이사한 달의 할 일(전입신고), 정책은 마감 달(신청 중) 또는 시작 달(곧 시작)
   anytime  '언제든'       상시·기간 모름 정책
+  job      '입사 N개월 뒤' 공고에서 읽은 날: 수습이 끝나는 달(수습 중 급여가 100%가 아닐 때),
+                          회사 주거지원비가 끝나는 달(이사하는 경우, 기간을 알 때)
 입사일을 모르므로 이사한 달은 '이번 달'로 두지 않고 따로 '이사한 달'로 보여 준다.
 
 규칙 (코드로 정한다, 설계 원칙: 날짜·숫자는 코드):
@@ -32,8 +34,9 @@ from typing import Literal
 
 from pydantic import Field
 
-from backend.calc.remaining import OutputModel, housing_aid
+from backend.calc.remaining import OutputModel, Scenario, housing_aid
 from backend.calc.summary import CalculationResult
+from backend.calc.text import won
 from backend.normalize.schema import ComparisonRow
 from backend.public_data.training import ncs_for_job
 from backend.support.policies import FIRST_JOB_MAX, LocalSupport, SupportPolicy, is_first_job
@@ -44,12 +47,15 @@ ANYTIME_MAX = 5
 _DEPOSIT_WORDS = re.compile(r'보증금|전세|전월세|버팀목|보증부')
 _RENT_WORDS = re.compile(r'월세')
 
-ItemKind = Literal['deposit', 'move_in', 'policy']
-SlotKind = Literal['before', 'move_month', 'month', 'start', 'anytime']
+ItemKind = Literal['deposit', 'move_in', 'policy', 'milestone']
+SlotKind = Literal['before', 'move_month', 'month', 'start', 'job', 'anytime']
 
 
 class PlanItem(OutputModel):
-    kind: ItemKind = Field(description='deposit=보증금 마련, move_in=전입신고, policy=지원 신청')
+    kind: ItemKind = Field(
+        description='deposit=보증금 마련, move_in=전입신고, policy=지원 신청, '
+        'milestone=공고에서 읽은 날 (수습 끝·주거지원비 끝)'
+    )
     title: str
     detail: str | None = Field(default=None, description='한 줄 설명 (해요체)')
     when: str | None = Field(
@@ -62,6 +68,11 @@ class PlanItem(OutputModel):
     source: str | None = Field(default=None, description='출처 (데이터명·기간 또는 법령)')
     url: str | None = Field(default=None, description='신청·안내 페이지')
     policy_id: str | None = None
+    remaining_before: int | None = Field(
+        default=None,
+        description='이 날 전 매달 남는 돈 (원, 공고에서 읽은 날만). 계산값이 있을 때만',
+    )
+    remaining_after: int | None = Field(default=None, description='이 날 뒤 매달 남는 돈 (원)')
     scope: Literal['local', 'national'] | None = Field(
         default=None, description='정책이면 지역 정책(local)인지 전국 정책(national)인지'
     )
@@ -69,7 +80,7 @@ class PlanItem(OutputModel):
 
 class PlanSlot(OutputModel):
     kind: SlotKind
-    label: str = Field(description="'이사 전', '이사한 달', '2026년 12월', '언제든'")
+    label: str = Field(description="'이사 전', '이사한 달', '2026년 12월', '입사 3개월 뒤' 등")
     month: str | None = Field(default=None, description='달력 달이면 YYYY-MM')
     items: list[PlanItem]
 
@@ -221,6 +232,52 @@ MOVE_IN_DORM = MOVE_IN.model_copy(
 )
 
 
+def _milestones(
+    row: ComparisonRow | None,
+    moving: bool,
+    scenario: Scenario | None = None,
+    gap: int | None = None,
+) -> dict[int, list[PlanItem]]:
+    """공고에서 읽은 날 (입사 몇 개월 뒤 → 할 일). 돈이 바뀌는 때만 넣는다.
+
+    scenario: 이 경우의 계산 결과, gap: 수습 동안 세후 월급이 덜한 만큼. 남는 돈은 수습이 끝나고
+    주거지원비를 받는 때 기준(calc)이라, 입사 때 값에서 시작해 날마다 바뀐 만큼 더해 앞뒤 값을 단다.
+    """
+    found: dict[int, list[PlanItem]] = {}
+    if row is None:
+        return found
+    # 입사 때 매달 남는 돈. calc 값은 수습이 끝난 뒤(주거지원비는 받는 중) 기준이라 수습 차이만 뺀다
+    start = scenario.monthly_remaining if scenario else None
+    events: list[tuple[int, int | None, PlanItem]] = []  # (몇 개월 뒤, 바뀌는 만큼, 할 일)
+    months, rate = row.probation_months.value, row.probation_pay_rate.value
+    if months and rate is not None and rate < 1:
+        detail = f'월급이 {round(rate * 100)}%에서 100%로 올라요.'
+        item = PlanItem(kind='milestone', title='수습이 끝나요', detail=detail, source='공고')
+        events.append((months, gap, item))
+        start = start - gap if start is not None and gap is not None else None
+    aid = housing_aid(row)
+    if moving and aid and aid[1]:  # 주거지원비는 이사하는 경우에만 남는 돈에 들어간다 (calc)
+        amount, aid_months = aid
+        item = PlanItem(
+            kind='milestone',
+            title='회사 주거지원비가 끝나요',
+            detail=f'매달 {won(amount)}이 끊겨요.',
+            amount_krw=amount,
+            source='공고',
+        )
+        # 이사 주거비 = 새 집 주거비 − 지원비 (0원 아래 없음, calc). 0원이면 실제로 뺀 만큼을 모른다
+        housing = scenario.housing.value if scenario else None
+        events.append((aid_months, -amount if housing else None, item))
+    # 앞뒤 값은 바뀌는 만큼을 모두 알 때만 (하나라도 모르면 금액 없이 문장만)
+    now = start if all(delta is not None for _, delta, _ in events) else None
+    for after, delta, item in sorted(events, key=lambda e: e[0]):
+        if now is not None and delta is not None:
+            item.remaining_before, now = now, now + delta
+            item.remaining_after = now
+        found.setdefault(after, []).append(item)
+    return found
+
+
 def _posting_plan(
     posting_id: str,
     company: str | None,
@@ -231,8 +288,11 @@ def _posting_plan(
     national: list[SupportPolicy],
     today: date,
     dorm: bool = False,
+    scenario: Scenario | None = None,
+    gap: int | None = None,
 ) -> PostingPlan:
-    """공고 하나의 플랜. dorm: 이사하면서 회사 사택·기숙사에 들어간다 (build_plan에서 정한다)."""
+    """공고 하나의 플랜. dorm: 이사하면서 회사 사택·기숙사에 들어간다 (build_plan에서 정한다).
+    scenario·gap: 입사한 뒤 칸에 남는 돈 앞뒤 값을 단다 (_milestones)."""
     last = _add_months(today.replace(day=1), MONTHS)
     loc = row.location.value if row else None
     region = ' '.join(x for x in (loc.sido, loc.sigungu) if x) or None if loc else None
@@ -279,6 +339,8 @@ def _posting_plan(
         ):
             continue
         slots.setdefault((kind, month), []).append(item)
+    for after, items in _milestones(row, moving, scenario, gap).items():
+        slots[('job', f'{after:03d}')] = items  # 입사 몇 개월 뒤 (세 자리로 둬서 순서대로)
     anytime = slots.get(('anytime', None), [])
     if len(anytime) > ANYTIME_MAX:
         notes.append(
@@ -289,7 +351,7 @@ def _posting_plan(
     if len(start := slots.get(('start', None), [])) > FIRST_JOB_MAX:
         slots[('start', None)] = start[:FIRST_JOB_MAX]
 
-    order = {'before': 0, 'move_month': 1, 'month': 2, 'start': 3, 'anytime': 4}
+    order = {'before': 0, 'move_month': 1, 'month': 2, 'start': 3, 'job': 4, 'anytime': 5}
     built = []
     for (kind, month), items in sorted(
         slots.items(), key=lambda kv: (order[kv[0][0]], kv[0][1] or '')
@@ -297,6 +359,8 @@ def _posting_plan(
         if kind == 'month' and month:
             y, m = month.split('-')
             label = f'{y}년 {int(m)}월'
+        elif kind == 'job' and month:
+            label, month = f'입사 {int(month)}개월 뒤', None  # 입사일을 몰라 달력 달이 아니다
         else:
             label = {
                 'before': '이사 전',
@@ -367,11 +431,18 @@ def build_plan(
             support.national if support else [],
             today,
         )
-        plans.append(_posting_plan(*head, moving, *tail, dorm=dorm))
-        # 이사 플랜이면 통근 플랜도 함께 (통근이 해당될 때): 화면이 둘을 바꿔 보여 준다
+        # 수습 동안 세후 월급이 덜한 만큼 (입사한 뒤 칸의 남는 돈 앞뒤 값)
+        net, cut = posting.net_income.value, posting.probation_net
+        gap = net - cut if net is not None and cut is not None else None
         commute = next((s for s in posting.scenarios if s.case == 'commute'), None)
+        plans.append(
+            _posting_plan(
+                *head, moving, *tail, dorm=dorm, scenario=move if moving else commute, gap=gap
+            )
+        )
+        # 이사 플랜이면 통근 플랜도 함께 (통근이 해당될 때): 화면이 둘을 바꿔 보여 준다
         if moving and commute and commute.applicable:
-            alternates.append(_posting_plan(*head, False, *tail))
+            alternates.append(_posting_plan(*head, False, *tail, scenario=commute, gap=gap))
     notes = ['신청 조건과 일정은 바뀔 수 있어요. 신청 전에 안내 페이지에서 확인해 주세요.']
     if support is None:
         notes.append('청년 지원 정보를 불러오지 못해 지원 신청 일정은 빠져 있어요.')

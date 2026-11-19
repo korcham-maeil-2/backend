@@ -93,6 +93,8 @@ def test_moving_plan_puts_each_task_in_its_month():
         '이사한 달': ['전입신고', '청년 월세 특별지원'],  # 상시 월세 지원은 전입한 뒤에
         '2026년 12월': ['나주 청년 월세 지원'],  # 신청 중 → 마감 달
         '2027년 2월': ['나주 이사비 지원'],  # 곧 시작 → 시작 달
+        '입사 3개월 뒤': ['수습이 끝나요'],  # 공고에서 읽은 날 (수습 중 90%)
+        '입사 24개월 뒤': ['회사 주거지원비가 끝나요'],
         '언제든': ['청년 주거 상담'],
     }
     [posting] = plan.postings
@@ -184,6 +186,8 @@ def test_targeted_and_undated_general_policies_stay_out():
         '이사 전': ['보증금 마련'],
         '이사한 달': ['전입신고'],
         '2026년 11월': ['청년 문화패스'],
+        '입사 3개월 뒤': ['수습이 끝나요'],
+        '입사 24개월 뒤': ['회사 주거지원비가 끝나요'],
     }
 
 
@@ -234,7 +238,12 @@ def test_commute_only_plan_has_no_move_tasks_and_no_local_policies():
 def test_without_support_plan_keeps_move_tasks():
     table, result = naju()
     plan = build_plan(result, None, table, TODAY)
-    assert slots_of(plan) == {'이사 전': ['보증금 마련'], '이사한 달': ['전입신고']}
+    assert slots_of(plan) == {
+        '이사 전': ['보증금 마련'],
+        '이사한 달': ['전입신고'],
+        '입사 3개월 뒤': ['수습이 끝나요'],
+        '입사 24개월 뒤': ['회사 주거지원비가 끝나요'],
+    }
     assert any('청년 지원 정보를 불러오지 못해' in n for n in plan.notes)
 
 
@@ -355,3 +364,56 @@ def test_commute_alternate_plan_when_both_cases_apply():
     assert commute.posting_id == moving.posting_id
     titles = [i.title for s in commute.slots for i in s.items]
     assert titles == ['청년도약계좌']
+
+
+def test_milestones_from_posting_only_when_money_changes():
+    """공고에서 읽은 날: 수습 중 급여가 100% 미만이면 수습 끝,
+    이사하면서 주거지원비 기간을 알면 지원 끝."""
+    table, result = naju()
+    plan = build_plan(result, None, table, TODAY)
+    [probation] = next(s for s in plan.postings[0].slots if s.label == '입사 3개월 뒤').items
+    assert probation.kind == 'milestone' and '90%' in probation.detail
+    [aid] = next(s for s in plan.postings[0].slots if s.label == '입사 24개월 뒤').items
+    assert aid.amount_krw == table[0]['housing_allowance_monthly_krw']['value']
+    assert all(s.month is None for s in plan.postings[0].slots if s.kind == 'job')
+    # 수습 중 100%면 돈이 바뀌지 않아 넣지 않는다
+    table[0]['probation_pay_rate']['value'] = 1.0
+    labels = slots_of(build_plan(result, None, table, TODAY))
+    assert '입사 3개월 뒤' not in labels and '입사 24개월 뒤' in labels
+
+
+def test_milestones_show_remaining_before_and_after():
+    """입사한 뒤 칸: 그날 앞뒤로 매달 남는 돈. 계산 결과(수습 끝·지원 받는 때)에서 거꾸로 짚는다."""
+
+    def paid(**costs):  # 나주 공고는 급여가 내규라, 연봉을 넣었다고 본다
+        table = scenario_table('down_naju')
+        table[0]['salary_type']['value'] = 'annual'
+        table[0]['annual_salary_krw'] = {'value': 36_000_000, 'status': 'user_input'}
+        profile = naju_profile(27)
+        profile['postings']['posting-1'] = {**profile['postings']['posting-1'], **costs}
+        return table, calculate_all(table, profile, NAJU_RENT)
+
+    table, result = paid()
+    [posting] = result['postings']
+    move = next(s for s in posting['scenarios'] if s['case'] == 'move')
+    remaining, net = move['monthly_remaining'], posting['net_income']['value']
+    cut = posting['probation_net']
+    assert cut is not None and 0 < cut < net  # 수습 90% → 세후 월급도 줄어든다
+    aid_krw = table[0]['housing_allowance_monthly_krw']['value']
+    plan = build_plan(result, None, table, TODAY)
+    item = {s.label: s.items[0] for s in plan.postings[0].slots if s.kind == 'job'}
+    probation, aid = item['입사 3개월 뒤'], item['입사 24개월 뒤']
+    assert (probation.remaining_before, probation.remaining_after) == (
+        remaining - (net - cut),
+        remaining,
+    )
+    assert (aid.remaining_before, aid.remaining_after) == (remaining, remaining - aid_krw)
+    # 새 집 주거비 < 지원비면 주거비가 0원으로 막혀 줄어드는 만큼을 모른다 → 금액 없이
+    table, result = paid(move_housing={'value': aid_krw // 2})
+    plan = build_plan(result, None, table, TODAY)
+    assert all(
+        i.remaining_before is None and i.remaining_after is None
+        for s in plan.postings[0].slots
+        if s.kind == 'job'
+        for i in s.items
+    )

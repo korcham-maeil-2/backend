@@ -108,10 +108,19 @@ def create_message(
         )
         raise error(failure.failed) from e
 
+    # 비용 확인용: 작업·모델·토큰 수만 남긴다 (글 내용은 남기지 않는다)
+    usage = getattr(response, 'usage', None)
+    logger.info(
+        '[%s] Claude 사용량 model=%s in=%s out=%s cache_read=%s',
+        failure.task,
+        model,
+        getattr(usage, 'input_tokens', '?'),
+        getattr(usage, 'output_tokens', '?'),
+        getattr(usage, 'cache_read_input_tokens', 0) or 0,
+    )
     if response.stop_reason == 'refusal':
         raise error(failure.refusal)
     if response.stop_reason == 'max_tokens':
-        usage = getattr(response, 'usage', None)
         logger.warning(
             '[%s] 답이 max_tokens에서 잘림 (출력 %s토큰)',
             failure.task,

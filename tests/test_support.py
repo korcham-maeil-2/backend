@@ -307,6 +307,19 @@ def test_region_scope(owner, expected):
     assert [p.scope for p in found] == ([expected] if expected else [])
 
 
+def test_research_contracts_are_not_support():
+    """온통청년에 올라온 연구용역은 사람이 신청하는 지원이 아니라 뺀다."""
+    found = pick(
+        pol(plcyNo='1', plcyNm='청년 월세 지원'),
+        pol(
+            plcyNo='2',
+            plcyNm='청년자산형성 연계 강화',
+            plcySprtCn='5종 지원사업 간 연계 강화 연구용역',
+        ),
+    )
+    assert names(found) == ['청년 월세 지원']
+
+
 def test_age_filter():
     policies = [
         pol(plcyNo='1', plcyNm='19~34', sprtTrgtMinAge='19', sprtTrgtMaxAge='34'),
