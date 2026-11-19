@@ -53,9 +53,11 @@ Kind = Literal[
 ]
 MAX_IDS = 20  # 한 요청에서 처음 읽는 정책 수 (저장된 것은 개수와 상관없이 다 돌려준다)
 READ_THREADS = 4  # 처음 보는 정책을 동시에 읽는 수
-RETRY_AFTER_SECONDS = (
-    60 * 60
-)  # 읽기에 실패한 정책은 한 시간 뒤에 다시 (같은 실패에 돈을 계속 쓰지 않게)
+# 못 읽은 정책을 다시 읽기까지 (그동안 그 정책은 이름만 보인다, 아무도 기다리지 않는다):
+#   거절·잘림 → 한 시간 (다시 해도 같기 쉽고 돈이 든다)
+#   한도 초과·연결 실패·API 오류 → 10초 (SDK가 이미 두 번 다시 해 봤고, 요금도 나가지 않는다)
+RETRY_AFTER_SECONDS = 60 * 60
+RETRY_SOON_SECONDS = 10
 
 
 class Condition(OutputModel):
@@ -120,14 +122,16 @@ You read one Korean youth-policy notice and fill the JSON schema. Rules:
   applicant like the reader; otherwise other.
   text: the condition in short plain Korean (<= 40 chars).
   quote: copy the exact characters from the text (no paraphrase, no ellipsis)."""
+# 화면에는 나가지 않는다 (못 읽은 정책은 이름만 보인다). 실패 종류를 가르려고 문구를 다르게 둔다
 FAILURE = FailureMessages(
     task='정책 조건 읽기',
-    busy='잠시 후 다시 시도해 주세요.',
-    failed='정책 조건을 읽지 못했어요.',
-    unreachable='정책 조건을 읽지 못했어요.',
-    refusal='정책 조건을 읽지 못했어요.',
-    too_long='정책 조건을 읽지 못했어요.',
+    busy='정책 조건 읽기: 요청 한도 초과',
+    failed='정책 조건 읽기: API 오류',
+    unreachable='정책 조건 읽기: 연결 실패',
+    refusal='정책 조건 읽기: 거절',
+    too_long='정책 조건 읽기: 답이 잘림',
 )
+TRANSIENT = {FAILURE.busy, FAILURE.failed, FAILURE.unreachable}  # 잠깐의 문제 → RETRY_SOON_SECONDS
 
 
 class TermsError(Exception):
@@ -284,18 +288,20 @@ class PolicyTermsService:
             failed = self._failed.get(plcy_no)
             if failed and failed[0] == sha and time.time() < failed[1]:
                 return None
+            wait = RETRY_AFTER_SECONDS
             try:
                 # Claude는 가린 글을 받는다 (create_message가 보내기 직전에 가림) → 가린 글과 대조
                 terms = checked(self._read(text), mask_text(text))
-            except TermsError:
+            except TermsError as e:
                 terms = None
-            except (
-                Exception
-            ):  # 정책 하나가 잘못돼도 나머지는 보여 준다 (요청 전체가 500이 되지 않게)
+                if str(e) in TRANSIENT:
+                    wait = RETRY_SOON_SECONDS
+            # 정책 하나가 잘못돼도 나머지는 보여 준다 (요청 전체가 500이 되지 않게)
+            except Exception:
                 logger.exception('정책 조건을 읽다가 예상 못 한 오류 (%s)', plcy_no)
                 terms = None
             if terms is None:
-                self._failed[plcy_no] = (sha, time.time() + RETRY_AFTER_SECONDS)
+                self._failed[plcy_no] = (sha, time.time() + wait)
             else:
                 self._store.put(plcy_no, sha, terms)
             return terms

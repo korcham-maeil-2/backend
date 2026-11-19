@@ -151,6 +151,27 @@ def test_one_broken_read_does_not_fail_the_others(tmp_path):
     assert list(got) == ['20260001']
 
 
+def test_busy_or_unreachable_is_retried_soon(tmp_path, monkeypatch):
+    """한도 초과·연결 실패 같은 잠깐의 문제는 곧 다시 읽는다 (잠깐 몰려도 오래 비지 않게)."""
+    import backend.support.terms as terms_module
+
+    class Busy(FakeReader):
+        def __call__(self, text):
+            self.calls.append(text)
+            raise TermsError(terms_module.FAILURE.busy)
+
+    reader = Busy()
+    terms = service(tmp_path, reader)
+    terms.get(['46170'], ['20260001'])
+    terms.get(['46170'], ['20260001'])
+    assert len(reader.calls) == 1  # 쉬는 시간(10초) 안에는 다시 부르지 않는다
+    monkeypatch.setattr(terms_module, 'RETRY_SOON_SECONDS', 0)
+    terms.get(['46170'], ['20260001'])  # 아직 10초 안 → 부르지 않고, 다음 실패부터 0초
+    monkeypatch.setattr(terms_module.time, 'time', lambda: 10**10)  # 쉬는 시간이 지남
+    terms.get(['46170'], ['20260001'])
+    assert len(reader.calls) == 2
+
+
 def test_failed_read_is_not_retried_right_away(tmp_path):
     """잘림·거절처럼 실패한 정책은 한동안 다시 읽지 않는다 (요청마다 돈을 쓰지 않게)."""
     reader = FakeReader(error=True)
