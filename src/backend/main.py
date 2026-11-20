@@ -10,9 +10,10 @@ FastAPI는 "주소(URL)로 요청이 오면 파이썬 함수를 실행하고 결
     uv run fastapi dev src/backend/main.py
 """
 
+import asyncio
 import logging
 import os
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -33,6 +34,7 @@ from backend.public_data.finlife import SavingsSource, savings_from_env
 from backend.public_data.rent import HttpRentFetcher, RentCache, RentEstimator, RentFetcher
 from backend.public_data.training import TrainingSource, training_from_env
 from backend.report import ClaudeReviewer, ClaudeWriter, ReportAgent
+from backend.retention import purge_forever, ttl_from_env
 from backend.support import PolicySource, is_relevant, source_from_env
 from backend.support.terms import ClaudeTermsReader, PolicyTermsService, TermsReader, TermsStore
 from backend.support.youthcenter import API_KEY_ENV as YOUTHCENTER_KEY_ENV
@@ -117,6 +119,10 @@ def create_app(
     if rent_fetcher is None:
         logger.info('DATA_GO_KR_SERVICE_KEY가 없어 월세 실거래가를 조회하지 않습니다.')
 
+    # 세션을 서버에 두는 시간 (SESSION_TTL_HOURS, 기본 24시간).
+    # 잘못된 값이면 서버가 켜질 때 바로 멈춘다
+    session_ttl = ttl_from_env()
+
     # [lifespan — 서버가 켜질 때 / 꺼질 때 할 일]
     # yield 앞: 서버가 켜질 때 한 번 실행 (DB 연결 열기, 그래프 만들기)
     # yield 뒤: 서버가 꺼질 때 실행 (async with 블록이 끝나면서 DB 연결이 자동으로 닫힌다)
@@ -146,7 +152,14 @@ def create_app(
             app.state.file_reader = file_reader
             app.state.savings_source = savings_source or savings_from_env()
             app.state.training_source = training_source or training_from_env()
-            yield
+            # 오래된 세션(사용자가 넣은 공고 글·생활비)을 주기적으로 지운다 (retention.py)
+            purge = asyncio.create_task(purge_forever(saver, db_path, session_ttl))
+            try:
+                yield
+            finally:
+                purge.cancel()
+                with suppress(asyncio.CancelledError):
+                    await purge
 
     app = FastAPI(title='월급지도 API', version='0.1.0', lifespan=lifespan)
 
